@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -28,13 +29,34 @@ jobs:
             npm install --ignore-scripts --no-audit --no-fund --loglevel verbose
           }
 
-      - name: Build
-        run: npm run build
+      - name: Build (renderer)
+        run: npm run build:renderer
+
+      - name: Build (electron)
+        run: npm run build:electron
+
+      - name: Generate icon
+        run: npm run gen:icon
+
+      - name: Package (electron-builder)
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: List release output
+        shell: pwsh
+        run: |
+          if (Test-Path release) { Get-ChildItem -Recurse release | Select-Object FullName, Length }
+          else { Write-Host "Diretório release/ não encontrado" }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-win-x64
+          path: release/**
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release/*.exe
-            release/*.yml
-            release/*.blockmap
+            release/**/*.exe
+            release/**/*.yml
+            release/**/*.blockmap
