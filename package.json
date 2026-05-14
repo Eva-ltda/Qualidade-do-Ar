@@ -50,12 +50,15 @@
   "build": {
     "appId": "com.eva.dashboard.qualidadedoar",
     "productName": "EVA Dashboard Qualidade do Ar",
+    "asar": true,
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**",
       "dist-electron/**",
+      "electron/**",
       "Logo.png",
       "build/icon.ico",
       "package.json"
@@ -63,12 +66,8 @@
     "win": {
       "icon": "build/icon.ico",
       "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
+        "portable",
+        "nsis"
       ]
     },
     "nsis": {

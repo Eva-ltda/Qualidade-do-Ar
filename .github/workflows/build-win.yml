@@ -1,0 +1,40 @@
+name: build-windows
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build (renderer)
+        run: npm run build:renderer
+
+      - name: Build (electron)
+        run: npm run build:electron
+
+      - name: Generate icon
+        run: npm run gen:icon
+
+      - name: Package (electron-builder)
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-win-x64
+          path: release/**
