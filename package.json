@@ -1,0 +1,74 @@
+{
+  "name": "voc",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k -n renderer,electron,app \"vite\" \"tsup --watch\" \"wait-on tcp:5173 file:dist-electron/main.cjs file:dist-electron/preload.cjs && electron .\"",
+    "typecheck": "tsc -b && tsc -p tsconfig.electron.json",
+    "build:renderer": "vite build",
+    "build:electron": "tsup",
+    "build": "npm run typecheck && npm run build:renderer && npm run build:electron && electron-builder",
+    "postinstall": "electron-builder install-app-deps",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@serialport/parser-readline": "^13.0.0",
+    "framer-motion": "^12.23.12",
+    "lucide-react": "^0.542.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "recharts": "^3.1.2",
+    "serialport": "^13.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.12.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.4.21",
+    "concurrently": "^9.2.1",
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17",
+    "tsup": "^8.5.1",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.59.2",
+    "vite": "^8.0.12",
+    "wait-on": "^9.0.10"
+  },
+  "build": {
+    "appId": "com.eva.dashboard.qualidadedoar",
+    "productName": "EVA Dashboard Qualidade do Ar",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
