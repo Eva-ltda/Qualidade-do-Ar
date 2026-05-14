@@ -7,9 +7,10 @@
   "scripts": {
     "dev": "concurrently -k -n renderer,electron,app \"vite\" \"tsup --watch\" \"wait-on tcp:5173 file:dist-electron/main.cjs file:dist-electron/preload.cjs && electron .\"",
     "typecheck": "tsc -b && tsc -p tsconfig.electron.json",
+    "gen:icon": "node scripts/generate-icon.mjs",
     "build:renderer": "vite build",
     "build:electron": "tsup",
-    "build": "npm run typecheck && npm run build:renderer && npm run build:electron && electron-builder",
+    "build": "npm run typecheck && npm run build:renderer && npm run build:electron && npm run gen:icon && electron-builder",
     "postinstall": "electron-builder install-app-deps",
     "lint": "eslint ."
   },
@@ -38,6 +39,8 @@
     "globals": "^17.6.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
+    "jimp": "^1.6.0",
+    "to-ico": "^1.1.5",
     "tsup": "^8.5.1",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
@@ -53,9 +56,12 @@
     "files": [
       "dist/**",
       "dist-electron/**",
+      "Logo.png",
+      "build/icon.ico",
       "package.json"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -68,7 +74,9 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     }
   }
 }
