@@ -55,6 +55,10 @@ type Props = {
   status: ConnectionStatus
   lastReceivedAt?: number
   lastRaw?: string
+  updateValue: number
+  onUpdateValueChange: (value: number) => void
+  updateUnit: 'seconds' | 'minutes' | 'hours'
+  onUpdateUnitChange: (value: 'seconds' | 'minutes' | 'hours') => void
 }
 
 export function Header({
@@ -67,6 +71,10 @@ export function Header({
   status,
   lastReceivedAt,
   lastRaw,
+  updateValue,
+  onUpdateValueChange,
+  updateUnit,
+  onUpdateUnitChange,
 }: Props) {
   const [clock, setClock] = useState(() => Date.now())
   const [logoSrc, setLogoSrc] = useState<string>(evaLogoUrl)
@@ -89,11 +97,30 @@ export function Header({
   }, [])
 
   const portLabel = useMemo(() => {
-    if (!selectedPort) return 'Selecionar COM'
-    const p = ports.find((x) => x.path === selectedPort)
-    if (!p) return selectedPort
+    const currentPort = selectedPort || status.portPath || ''
+    if (!currentPort) return 'Selecionar COM'
+    const p = ports.find((x) => x.path === currentPort)
+    if (!p) return currentPort
     return p.friendlyName ? `${p.path} — ${p.friendlyName}` : p.manufacturer ? `${p.path} — ${p.manufacturer}` : p.path
-  }, [ports, selectedPort])
+  }, [ports, selectedPort, status.portPath])
+
+  const updateLabel = useMemo(() => {
+    const unitLabel = updateUnit === 'seconds' ? 'segundos' : updateUnit === 'minutes' ? 'minutos' : 'horas'
+    return `${updateValue} ${unitLabel}`
+  }, [updateUnit, updateValue])
+
+  const selectValue = selectedPort || status.portPath || ''
+
+  const portOptions = useMemo(() => {
+    const map = new Map<string, SerialPortInfo>()
+    for (const port of ports) map.set(port.path, port)
+
+    if (selectValue && !map.has(selectValue)) {
+      map.set(selectValue, { path: selectValue })
+    }
+
+    return Array.from(map.values())
+  }, [ports, selectValue])
 
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200/70 bg-white/85 backdrop-blur">
@@ -148,7 +175,7 @@ export function Header({
                     </button>
 
                     <select
-                      value={selectedPort}
+                      value={selectValue}
                       onChange={(e) => {
                         const value = e.target.value
                         onSelectPort(value)
@@ -157,7 +184,7 @@ export function Header({
                       className="h-9 w-[180px] rounded-lg bg-white px-2 text-sm font-medium text-slate-900 ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-900/20"
                     >
                       <option value="">Selecionar...</option>
-                      {ports.map((p) => (
+                      {portOptions.map((p) => (
                         <option key={p.path} value={p.path}>
                           {p.path}
                         </option>
@@ -171,12 +198,30 @@ export function Header({
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <div className="text-[11px] font-medium text-slate-500">Atualização</div>
-                    <div className="text-sm font-semibold text-slate-900">2 segundos</div>
+                    <div className="text-sm font-semibold text-slate-900">{updateLabel}</div>
                   </div>
                   <div>
                     <div className="text-[11px] font-medium text-slate-500">Últimos dados</div>
                     <div className="text-sm font-semibold text-slate-900">{formatTime(lastReceivedAt)}</div>
                   </div>
+                </div>
+                <div className="mt-2 flex items-center gap-2 rounded-lg bg-slate-50 px-2 py-2 ring-1 ring-slate-200">
+                  <input
+                    type="number"
+                    min={1}
+                    value={updateValue}
+                    onChange={(e) => onUpdateValueChange(Number(e.target.value) || 1)}
+                    className="w-14 bg-transparent text-right text-xs font-semibold text-slate-900 outline-none"
+                  />
+                  <select
+                    value={updateUnit}
+                    onChange={(e) => onUpdateUnitChange(e.target.value as 'seconds' | 'minutes' | 'hours')}
+                    className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-900 outline-none"
+                  >
+                    <option value="seconds">Segundos</option>
+                    <option value="minutes">Minutos</option>
+                    <option value="hours">Horas</option>
+                  </select>
                 </div>
                 <div className="mt-2 truncate text-[11px] text-slate-500">{lastRaw ?? 'Aguardando dados CSV...'}</div>
               </div>

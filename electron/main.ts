@@ -15,6 +15,10 @@ function resolveRendererIndexPath() {
   return path.join(app.getAppPath(), 'dist', 'renderer', 'index.html')
 }
 
+function resolveAppIconPath() {
+  return path.join(app.getAppPath(), 'Logo.png')
+}
+
 function broadcast(channel: string, payload: unknown) {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, payload)
@@ -28,6 +32,7 @@ function createWindow() {
     minWidth: 1200,
     minHeight: 760,
     backgroundColor: '#f6f7fb',
+    icon: resolveAppIconPath(),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

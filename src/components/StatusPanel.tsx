@@ -2,8 +2,8 @@ import { motion } from 'framer-motion'
 import { getQualityTone, getStatusMessage } from '../lib/airQuality'
 
 type Props = {
-  internalLabel: 'Excelente' | 'Boa' | 'Moderada' | 'Ruim'
-  externalLabel: 'Excelente' | 'Boa' | 'Moderada' | 'Ruim'
+  internalLabel: 'Excelente' | 'Boa' | 'Moderada' | 'Ruim' | 'Muito Ruim'
+  externalLabel: 'Excelente' | 'Boa' | 'Moderada' | 'Ruim' | 'Muito Ruim'
 }
 
 function StatusRow({ title, label }: { title: string; label: Props['internalLabel'] }) {
@@ -42,4 +42,3 @@ export function StatusPanel({ internalLabel, externalLabel }: Props) {
     </motion.aside>
   )
 }
-

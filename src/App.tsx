@@ -9,6 +9,7 @@ import { Footer } from './components/Footer'
 import { useSerial } from './hooks/useSerial'
 import { getAirQualityFromVoc } from './lib/airQuality'
 import { formatInt, formatNumber } from './lib/format'
+import { useMemo, useState } from 'react'
 
 function EnvironmentSection({
   title,
@@ -65,11 +66,22 @@ function EnvironmentSection({
 }
 
 function App() {
-  const { ports, selectedPort, setSelectedPort, status, lastFrame, history, refreshPorts, connect, exportCsv } =
-    useSerial()
+  const [updateValue, setUpdateValue] = useState(2)
+  const [updateUnit, setUpdateUnit] = useState<'seconds' | 'minutes' | 'hours'>('seconds')
 
-  const qi = getAirQualityFromVoc(lastFrame?.vocInterno ?? Number.NaN)
-  const qe = getAirQualityFromVoc(lastFrame?.vocExterno ?? Number.NaN)
+  const updateIntervalMs = useMemo(() => {
+    const unitMs = updateUnit === 'seconds' ? 1000 : updateUnit === 'minutes' ? 60 * 1000 : 60 * 60 * 1000
+    return Math.max(1, updateValue) * unitMs
+  }, [updateUnit, updateValue])
+
+  const { ports, selectedPort, setSelectedPort, status, lastFrame, history, refreshPorts, connect, exportCsv } =
+    useSerial(updateIntervalMs)
+
+  const vocInternoCorrigido = lastFrame?.vocInternoCorrigido ?? lastFrame?.vocInterno ?? Number.NaN
+  const vocExternoCorrigido = lastFrame?.vocExternoCorrigido ?? lastFrame?.vocExterno ?? Number.NaN
+
+  const qi = getAirQualityFromVoc(vocInternoCorrigido)
+  const qe = getAirQualityFromVoc(vocExternoCorrigido)
 
   return (
     <div className="min-h-full">
@@ -83,6 +95,10 @@ function App() {
         status={status}
         lastReceivedAt={lastFrame?.receivedAt}
         lastRaw={lastFrame?.raw}
+        updateValue={updateValue}
+        onUpdateValueChange={setUpdateValue}
+        updateUnit={updateUnit}
+        onUpdateUnitChange={setUpdateUnit}
       />
 
       <main className="mx-auto max-w-[1400px] px-6 py-6">
@@ -95,7 +111,7 @@ function App() {
                 temp: lastFrame?.tempInterno ?? Number.NaN,
                 hum: lastFrame?.humInterno ?? Number.NaN,
                 press: lastFrame?.pressInterno ?? Number.NaN,
-                voc: lastFrame?.vocInterno ?? Number.NaN,
+                voc: vocInternoCorrigido,
               }}
             />
           </div>
@@ -108,16 +124,24 @@ function App() {
                 temp: lastFrame?.tempExterno ?? Number.NaN,
                 hum: lastFrame?.humExterno ?? Number.NaN,
                 press: lastFrame?.pressExterno ?? Number.NaN,
-                voc: lastFrame?.vocExterno ?? Number.NaN,
+                voc: vocExternoCorrigido,
               }}
             />
           </div>
 
           <div className="col-span-12 xl:col-span-6">
-            <VOCGauge title="Qualidade do Ar Interno / VOC" voc={lastFrame?.vocInterno ?? Number.NaN} quality={qi} />
+            <VOCGauge
+              title="Qualidade do Ar Interno / VOC"
+              vocCalibrado={vocInternoCorrigido}
+              quality={qi}
+            />
           </div>
           <div className="col-span-12 xl:col-span-6">
-            <VOCGauge title="Qualidade do Ar Externo / VOC" voc={lastFrame?.vocExterno ?? Number.NaN} quality={qe} />
+            <VOCGauge
+              title="Qualidade do Ar Externo / VOC"
+              vocCalibrado={vocExternoCorrigido}
+              quality={qe}
+            />
           </div>
 
           <div className="col-span-12 xl:col-span-8">

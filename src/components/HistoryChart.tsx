@@ -9,7 +9,7 @@ import {
   YAxis,
 } from 'recharts'
 
-type Point = { t: string; interno: number; externo: number }
+type Point = { t: string; interno: number; externo: number; ts: number }
 
 export function HistoryChart({ data }: { data: Point[] }) {
   return (
@@ -19,12 +19,12 @@ export function HistoryChart({ data }: { data: Point[] }) {
       transition={{ duration: 0.35 }}
       className="rounded-2xl bg-white p-5 shadow-card ring-1 ring-slate-200"
     >
-      <div className="flex items-end justify-between gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="text-sm font-semibold text-slate-900">Histórico - Qualidade do Ar Interno vs Externo</div>
-          <div className="mt-1 text-xs text-slate-500">Últimos 30 pontos (atualização em tempo real)</div>
+          <div className="mt-1 text-xs text-slate-500">{data.length} pontos exibidos</div>
         </div>
-        <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
+        <div className="flex flex-wrap items-center gap-4 text-xs font-medium text-slate-600">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
             Interno
@@ -80,4 +80,3 @@ export function HistoryChart({ data }: { data: Point[] }) {
     </motion.div>
   )
 }
-

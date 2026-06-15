@@ -15,10 +15,14 @@ declare global {
     humInterno: number
     pressInterno: number
     vocInterno: number
+    vocInternoReal: number
+    vocInternoCorrigido: number
     tempExterno: number
     humExterno: number
     pressExterno: number
     vocExterno: number
+    vocExternoReal: number
+    vocExternoCorrigido: number
     raw: string
     receivedAt: number
   }

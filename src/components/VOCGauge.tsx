@@ -1,15 +1,15 @@
 import { animate, motion, useMotionValue, useTransform } from 'framer-motion'
 import { useEffect } from 'react'
-import { getQualityTone } from '../lib/airQuality'
+import { getQualityTone, vocToPPM } from '../lib/airQuality'
 import { formatNumber } from '../lib/format'
 
 type Props = {
   title: string
-  voc: number
-  quality: { label: 'Excelente' | 'Boa' | 'Moderada' | 'Ruim'; percent: number }
+  vocCalibrado: number
+  quality: { label: 'Excelente' | 'Boa' | 'Moderada' | 'Ruim' | 'Muito Ruim'; percent: number }
 }
 
-export function VOCGauge({ title, voc, quality }: Props) {
+export function VOCGauge({ title, vocCalibrado, quality }: Props) {
   const size = 180
   const stroke = 14
   const r = (size - stroke) / 2
@@ -17,6 +17,7 @@ export function VOCGauge({ title, voc, quality }: Props) {
   const p = Math.max(0, Math.min(100, quality.percent))
   const offset = c - (p / 100) * c
   const tone = getQualityTone(quality.label)
+  const ppm = vocToPPM(vocCalibrado)
 
   const percentMv = useMotionValue(0)
   const percentText = useTransform(percentMv, (v) => `${Math.round(v)}%`)
@@ -37,7 +38,7 @@ export function VOCGauge({ title, voc, quality }: Props) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-sm font-semibold text-slate-900">{title}</div>
-          <div className="mt-1 text-xs text-slate-500">VOC / Gases (KΩ)</div>
+          <div className="mt-1 text-xs text-slate-500">VOC calibrado + PPM</div>
         </div>
         <div className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${tone.text} ring-slate-200 bg-slate-50`}>
           {quality.label}
@@ -72,44 +73,50 @@ export function VOCGauge({ title, voc, quality }: Props) {
 
         <div className="col-span-6">
           <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
-            <div className="text-xs font-medium text-slate-500">Valor VOC</div>
+            <div className="text-xs font-medium text-slate-500">VOC Calibrado</div>
             <div className="mt-1 flex items-baseline gap-2">
               <motion.div
-                key={voc}
+                key={vocCalibrado}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.25 }}
                 className="text-2xl font-semibold text-slate-900"
               >
-                {formatNumber(voc, 1)}
+                {formatNumber(vocCalibrado, 2)}
               </motion.div>
               <div className="text-xs font-semibold text-slate-500">KΩ</div>
             </div>
 
+            <div className="mt-3">
+              <div className="text-xs font-medium text-slate-500">PPM</div>
+              <div className="mt-1 text-sm font-semibold text-slate-900">{ppm || 0} ppm</div>
+            </div>
+
             <div className="mt-4">
               <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
-                <div className="grid h-full w-full grid-cols-4">
-                  <div className="bg-red-500" />
-                  <div className="bg-orange-500" />
-                  <div className="bg-amber-400" />
+                <div className="grid h-full w-full grid-cols-5">
                   <div className="bg-emerald-500" />
+                  <div className="bg-green-500" />
+                  <div className="bg-amber-400" />
+                  <div className="bg-orange-500" />
+                  <div className="bg-red-500" />
                 </div>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[11px] text-slate-600">
                 <div>
-                  <span className="font-semibold">0–20</span> = Muito Ruim
+                  <span className="font-semibold">0–65</span> = Excelente
                 </div>
                 <div>
-                  <span className="font-semibold">20–40</span> = Ruim
+                  <span className="font-semibold">66–150</span> = Boa
                 </div>
                 <div>
-                  <span className="font-semibold">40–60</span> = Moderada
+                  <span className="font-semibold">151–300</span> = Moderada
                 </div>
                 <div>
-                  <span className="font-semibold">60–100</span> = Boa
+                  <span className="font-semibold">301–500</span> = Ruim
                 </div>
                 <div className="col-span-2">
-                  <span className="font-semibold">100+</span> = Excelente
+                  <span className="font-semibold">&gt;500</span> = Muito Ruim
                 </div>
               </div>
             </div>

@@ -3,11 +3,12 @@ import { getAirQualityFromVoc } from '../lib/airQuality'
 
 type QualityPoint = {
   t: string
+  ts: number
   interno: number
   externo: number
 }
 
-export function useSerial() {
+export function useSerial(sampleIntervalMs = 2000) {
   const [ports, setPorts] = useState<SerialPortInfo[]>([])
   const [selectedPort, setSelectedPort] = useState<string>('')
   const [status, setStatus] = useState<ConnectionStatus>({ state: 'disconnected' })
@@ -15,6 +16,7 @@ export function useSerial() {
   const [history, setHistory] = useState<QualityPoint[]>([])
 
   const recordsRef = useRef<SensorFrame[]>([])
+  const lastSampleAtRef = useRef<number>(0)
   const api = (window as unknown as { eva?: Window['eva'] }).eva
 
   const refreshPorts = useCallback(async () => {
@@ -65,10 +67,12 @@ export function useSerial() {
       'tempInterno_c',
       'humInterno_pct',
       'pressInterno_hpa',
+      'vocInternoReal_kohm',
       'vocInterno_kohm',
       'tempExterno_c',
       'humExterno_pct',
       'pressExterno_hpa',
+      'vocExternoReal_kohm',
       'vocExterno_kohm',
       'raw',
     ].join(delimiter)
@@ -79,10 +83,12 @@ export function useSerial() {
         fmt1(r.tempInterno),
         fmt0(r.humInterno),
         fmt0(r.pressInterno),
+        fmt1(r.vocInternoReal),
         fmt1(r.vocInterno),
         fmt1(r.tempExterno),
         fmt0(r.humExterno),
         fmt0(r.pressExterno),
+        fmt1(r.vocExternoReal),
         fmt1(r.vocExterno),
         escapeCsv(String(r.raw ?? '')),
       ].join(delimiter),
@@ -96,20 +102,42 @@ export function useSerial() {
     if (!api) return
     refreshPorts()
 
-    api.getStatus().then(setStatus).catch(() => {})
-    api.getLastPort().then((p) => p && setSelectedPort(p)).catch(() => {})
+    api
+      .getStatus()
+      .then((s) => {
+        setStatus(s)
+        if (s.portPath) setSelectedPort(s.portPath)
+      })
+      .catch(() => {})
 
-    const unsubStatus = api.onStatus((s) => setStatus(s))
+    api
+      .getLastPort()
+      .then((p) => {
+        if (p) setSelectedPort((current) => current || p)
+      })
+      .catch(() => {})
+
+    const unsubStatus = api.onStatus((s) => {
+      setStatus(s)
+      if (s.portPath) setSelectedPort(s.portPath)
+    })
     const unsubFrame = api.onFrame((frame) => {
-      setLastFrame(frame)
-
       recordsRef.current = [...recordsRef.current, frame].slice(-5000)
 
-      const qi = getAirQualityFromVoc(frame.vocInterno)
-      const qe = getAirQualityFromVoc(frame.vocExterno)
+      const now = frame.receivedAt
+      const lastSampleAt = lastSampleAtRef.current
+      if (Number.isFinite(sampleIntervalMs) && sampleIntervalMs > 0 && now - lastSampleAt < sampleIntervalMs) {
+        return
+      }
+      lastSampleAtRef.current = now
+
+      setLastFrame(frame)
+
+      const qi = getAirQualityFromVoc(frame.vocInternoCorrigido)
+      const qe = getAirQualityFromVoc(frame.vocExternoCorrigido)
       const t = new Date(frame.receivedAt).toLocaleTimeString('pt-BR', { hour12: false })
 
-      setHistory((prev) => [...prev, { t, interno: qi.percent, externo: qe.percent }].slice(-30))
+      setHistory((prev) => [...prev, { t, ts: frame.receivedAt, interno: qi.percent, externo: qe.percent }].slice(-30))
     })
 
     const interval = setInterval(refreshPorts, 4000)
@@ -118,7 +146,7 @@ export function useSerial() {
       unsubStatus()
       unsubFrame()
     }
-  }, [api, refreshPorts])
+  }, [api, refreshPorts, sampleIntervalMs])
 
   const selectedPortInfo = useMemo(
     () => ports.find((p) => p.path === selectedPort),

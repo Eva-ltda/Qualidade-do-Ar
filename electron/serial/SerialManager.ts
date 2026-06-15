@@ -175,18 +175,32 @@ export class SerialManager extends EventEmitter {
     const parts = rawLine.split(',').map((s) => s.trim())
     if (parts.length < 8) return null
 
-    const nums = parts.slice(0, 8).map((p) => Number(p))
+    const take = parts.length >= 10 ? 10 : 8
+    const nums = parts.slice(0, take).map((p) => Number(p))
     if (nums.some((n) => Number.isNaN(n))) return null
+
+    const hasCorrectedVoc = nums.length >= 10
+    const vocInternoReal = hasCorrectedVoc ? nums[3] : nums[3]
+    const vocInternoCorrigido = hasCorrectedVoc ? nums[4] : nums[3]
+    const tempExterno = hasCorrectedVoc ? nums[5] : nums[4]
+    const humExterno = hasCorrectedVoc ? nums[6] : nums[5]
+    const pressExterno = hasCorrectedVoc ? nums[7] : nums[6]
+    const vocExternoReal = hasCorrectedVoc ? nums[8] : nums[7]
+    const vocExternoCorrigido = hasCorrectedVoc ? nums[9] : nums[7]
 
     return {
       tempInterno: nums[0],
       humInterno: nums[1],
       pressInterno: nums[2],
-      vocInterno: nums[3],
-      tempExterno: nums[4],
-      humExterno: nums[5],
-      pressExterno: nums[6],
-      vocExterno: nums[7],
+      vocInterno: vocInternoCorrigido,
+      vocInternoReal,
+      vocInternoCorrigido,
+      tempExterno,
+      humExterno,
+      pressExterno,
+      vocExterno: vocExternoCorrigido,
+      vocExternoReal,
+      vocExternoCorrigido,
       raw: rawLine,
     }
   }
