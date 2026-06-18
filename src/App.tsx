@@ -7,7 +7,7 @@ import { HistoryChart } from './components/HistoryChart'
 import { SerialPanel } from './components/SerialPanel'
 import { Footer } from './components/Footer'
 import { useSerial } from './hooks/useSerial'
-import { getAirQualityFromVoc } from './lib/airQuality'
+import { getAirQualityFromVoc, vocToPPM } from './lib/airQuality'
 import { formatInt, formatNumber } from './lib/format'
 import { useMemo, useState } from 'react'
 
@@ -18,7 +18,7 @@ function EnvironmentSection({
 }: {
   title: string
   temperatureColor: { icon: string; bar: string }
-  values: { temp: number; hum: number; press: number; voc: number }
+  values: { temp: number; hum: number; press: number; ppm: number }
 }) {
   return (
     <section className="rounded-2xl bg-white p-5 shadow-card ring-1 ring-slate-200">
@@ -53,9 +53,9 @@ function EnvironmentSection({
           barClassName="bg-purple-500"
         />
         <SensorCard
-          title="VOC / Gases"
-          value={formatNumber(values.voc, 1)}
-          unit="KΩ"
+          title="PPM"
+          value={formatInt(values.ppm)}
+          unit="ppm"
           icon={<Leaf className="h-5 w-5" />}
           iconClassName="text-emerald-600"
           barClassName="bg-emerald-500"
@@ -79,6 +79,8 @@ function App() {
 
   const vocInternoCorrigido = lastFrame?.vocInternoCorrigido ?? lastFrame?.vocInterno ?? Number.NaN
   const vocExternoCorrigido = lastFrame?.vocExternoCorrigido ?? lastFrame?.vocExterno ?? Number.NaN
+  const ppmInterno = vocToPPM(vocInternoCorrigido)
+  const ppmExterno = vocToPPM(vocExternoCorrigido)
 
   const qi = getAirQualityFromVoc(vocInternoCorrigido)
   const qe = getAirQualityFromVoc(vocExternoCorrigido)
@@ -111,7 +113,7 @@ function App() {
                 temp: lastFrame?.tempInterno ?? Number.NaN,
                 hum: lastFrame?.humInterno ?? Number.NaN,
                 press: lastFrame?.pressInterno ?? Number.NaN,
-                voc: vocInternoCorrigido,
+                ppm: ppmInterno,
               }}
             />
           </div>
@@ -124,21 +126,21 @@ function App() {
                 temp: lastFrame?.tempExterno ?? Number.NaN,
                 hum: lastFrame?.humExterno ?? Number.NaN,
                 press: lastFrame?.pressExterno ?? Number.NaN,
-                voc: vocExternoCorrigido,
+                ppm: ppmExterno,
               }}
             />
           </div>
 
           <div className="col-span-12 xl:col-span-6">
             <VOCGauge
-              title="Qualidade do Ar Interno / VOC"
+              title="Qualidade do Ar Interno"
               vocCalibrado={vocInternoCorrigido}
               quality={qi}
             />
           </div>
           <div className="col-span-12 xl:col-span-6">
             <VOCGauge
-              title="Qualidade do Ar Externo / VOC"
+              title="Qualidade do Ar Externo"
               vocCalibrado={vocExternoCorrigido}
               quality={qe}
             />
