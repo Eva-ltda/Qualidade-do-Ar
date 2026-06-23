@@ -55,6 +55,10 @@ export function useSerial(sampleIntervalMs = 2000) {
     await api.disconnect()
   }, [api])
 
+  const clearSerialLines = useCallback(() => {
+    setSerialLines([])
+  }, [])
+
   const exportCsv = useCallback(async () => {
     if (!api) return { ok: false, error: 'API indisponível' } as ExportResult
     const rows = recordsRef.current
@@ -175,6 +179,7 @@ export function useSerial(sampleIntervalMs = 2000) {
     lastFrame,
     history,
     serialLines,
+    clearSerialLines,
     refreshPorts,
     connect,
     disconnect,

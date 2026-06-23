@@ -1,13 +1,23 @@
 import { motion } from 'framer-motion'
+import { useEffect, useRef } from 'react'
 import { formatTime } from '../lib/format'
 
 type Props = {
   portPath?: string
   status: ConnectionStatus
   lines: Array<{ id: string; ts: number; text: string }>
+  onClear: () => void
 }
 
-export function StatusPanel({ portPath, status, lines }: Props) {
+export function StatusPanel({ portPath, status, lines, onClear }: Props) {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const container = scrollRef.current
+    if (!container) return
+    container.scrollTop = container.scrollHeight
+  }, [lines])
+
   return (
     <motion.aside
       initial={{ opacity: 0, y: 6 }}
@@ -22,12 +32,24 @@ export function StatusPanel({ portPath, status, lines }: Props) {
             {portPath ? `${portPath} • ${status.state}` : 'Aguardando conexão serial'}
           </div>
         </div>
-        <div className="rounded-full bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
-          {lines.length} linhas
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded-full bg-slate-900 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-slate-800"
+          >
+            Clear
+          </button>
+          <div className="rounded-full bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
+            {lines.length} linhas
+          </div>
         </div>
       </div>
 
-      <div className="mt-4 h-[344px] overflow-y-auto rounded-xl bg-slate-950 p-3 font-mono text-xs text-emerald-300 ring-1 ring-slate-800">
+      <div
+        ref={scrollRef}
+        className="mt-4 h-[344px] overflow-y-auto rounded-xl bg-slate-950 p-3 font-mono text-xs text-emerald-300 ring-1 ring-slate-800"
+      >
         {lines.length === 0 ? (
           <div className="text-slate-400">Nenhuma linha recebida ainda...</div>
         ) : (

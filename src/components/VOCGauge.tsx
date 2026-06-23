@@ -38,7 +38,7 @@ export function VOCGauge({ title, vocCalibrado, quality }: Props) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-sm font-semibold text-slate-900">{title}</div>
-          <div className="mt-1 text-xs text-slate-500">Indicador baseado em PPM</div>
+          <div className="mt-1 text-xs text-slate-500">Indicador baseado em VOC calibrado</div>
         </div>
         <div className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${tone.text} ring-slate-200 bg-slate-50`}>
           {quality.label}
@@ -97,21 +97,31 @@ export function VOCGauge({ title, vocCalibrado, quality }: Props) {
                   <div className="bg-red-500" />
                 </div>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[11px] text-slate-600">
-                <div>
-                  <span className="font-semibold">0-65 ppm</span> = Excelente
+              <div className="mt-3 rounded-xl bg-white/70 p-3 text-[11px] text-slate-600 ring-1 ring-slate-200">
+                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Legenda de Qualidade
                 </div>
-                <div>
-                  <span className="font-semibold">66-150 ppm</span> = Boa
-                </div>
-                <div>
-                  <span className="font-semibold">151-300 ppm</span> = Moderada
-                </div>
-                <div>
-                  <span className="font-semibold">301-500 ppm</span> = Ruim
-                </div>
-                <div className="col-span-2">
-                  <span className="font-semibold">&gt;500 ppm</span> = Muito Ruim
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-2 py-1 leading-4">
+                    <span className="font-semibold">0–65 ppm</span>
+                    <span>Excelente</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-2 py-1 leading-4">
+                    <span className="font-semibold">66–150 ppm</span>
+                    <span>Boa</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-2 py-1 leading-4">
+                    <span className="font-semibold">151–300 ppm</span>
+                    <span>Moderada</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-2 py-1 leading-4">
+                    <span className="font-semibold">301–500 ppm</span>
+                    <span>Ruim</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-2 py-1 leading-4">
+                    <span className="font-semibold">&gt;500 ppm</span>
+                    <span>Muito ruim</span>
+                  </div>
                 </div>
               </div>
               <div className="mt-3 text-[11px] text-slate-500">PPM calculado internamente: {ppm} ppm</div>

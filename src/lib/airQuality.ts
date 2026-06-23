@@ -5,19 +5,67 @@ export type AirQuality = {
   percent: number
 }
 
+const VOC_TO_PPM_TABLE = [
+  { voc: 10, ppm: 370 },
+  { voc: 20, ppm: 274 },
+  { voc: 30, ppm: 203 },
+  { voc: 40, ppm: 150 },
+  { voc: 50, ppm: 112 },
+  { voc: 60, ppm: 83 },
+  { voc: 70, ppm: 61 },
+  { voc: 80, ppm: 45 },
+  { voc: 100, ppm: 25 },
+]
+
+function mapRange(value: number, inMin: number, inMax: number, outMin: number, outMax: number) {
+  if (inMax === inMin) return outMin
+  const ratio = (value - inMin) / (inMax - inMin)
+  return outMin + ratio * (outMax - outMin)
+}
+
 export function vocToPPM(voc: number) {
   if (!Number.isFinite(voc) || voc <= 0) return 0
-  return Math.round(1000 / Math.pow(voc / 10, 0.8))
+
+  for (let i = 0; i < VOC_TO_PPM_TABLE.length - 1; i += 1) {
+    const current = VOC_TO_PPM_TABLE[i]
+    const next = VOC_TO_PPM_TABLE[i + 1]
+
+    if (voc >= current.voc && voc <= next.voc) {
+      return Math.max(0, Math.round(mapRange(voc, current.voc, next.voc, current.ppm, next.ppm)))
+    }
+  }
+
+  const first = VOC_TO_PPM_TABLE[0]
+  const second = VOC_TO_PPM_TABLE[1]
+  if (voc < first.voc) {
+    return Math.max(0, Math.round(mapRange(voc, first.voc, second.voc, first.ppm, second.ppm)))
+  }
+
+  const last = VOC_TO_PPM_TABLE[VOC_TO_PPM_TABLE.length - 1]
+  const previous = VOC_TO_PPM_TABLE[VOC_TO_PPM_TABLE.length - 2]
+  return Math.max(0, Math.round(mapRange(voc, previous.voc, last.voc, previous.ppm, last.ppm)))
+}
+
+function ppmToPercent(ppm: number) {
+  if (!Number.isFinite(ppm) || ppm <= 0) return 100
+  if (ppm <= 65) return Math.round(mapRange(ppm, 0, 65, 100, 81))
+  if (ppm <= 150) return Math.round(mapRange(ppm, 65, 150, 80, 61))
+  if (ppm <= 300) return Math.round(mapRange(ppm, 150, 300, 60, 41))
+  if (ppm <= 500) return Math.round(mapRange(ppm, 300, 500, 40, 21))
+  return Math.max(0, Math.round(mapRange(Math.min(ppm, 1000), 500, 1000, 20, 0)))
 }
 
 export function getAirQualityFromVoc(voc: number): AirQuality {
-  const ppm = vocToPPM(voc)
   if (!Number.isFinite(voc) || voc <= 0) return { label: 'Muito Ruim', percent: 0 }
-  if (ppm <= 65) return { label: 'Excelente', percent: 92 }
-  if (ppm <= 150) return { label: 'Boa', percent: 74 }
-  if (ppm <= 300) return { label: 'Moderada', percent: 52 }
-  if (ppm <= 500) return { label: 'Ruim', percent: 28 }
-  return { label: 'Muito Ruim', percent: 12 }
+
+  const ppm = vocToPPM(voc)
+  const percent = ppmToPercent(ppm)
+
+  if (ppm <= 65) return { label: 'Excelente', percent }
+  if (ppm <= 150) return { label: 'Boa', percent }
+  if (ppm <= 300) return { label: 'Moderada', percent }
+  if (ppm <= 500) return { label: 'Ruim', percent }
+  return { label: 'Muito Ruim', percent }
 }
 
 export function getQualityTone(label: AirQualityLabel) {
