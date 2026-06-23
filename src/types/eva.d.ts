@@ -27,6 +27,11 @@ declare global {
     receivedAt: number
   }
 
+  type SerialRawLine = {
+    text: string
+    receivedAt: number
+  }
+
   type SerialPortInfo = {
     path: string
     manufacturer?: string
@@ -52,6 +57,7 @@ declare global {
       disconnect(): Promise<boolean>
       exportCsv(csvText: string): Promise<ExportResult>
       onFrame(handler: (frame: SensorFrame) => void): Unsubscribe
+      onRawLine(handler: (line: SerialRawLine) => void): Unsubscribe
       onStatus(handler: (status: ConnectionStatus) => void): Unsubscribe
     }
   }

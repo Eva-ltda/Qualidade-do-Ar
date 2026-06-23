@@ -8,12 +8,19 @@ type QualityPoint = {
   externo: number
 }
 
+type SerialLogLine = {
+  id: string
+  ts: number
+  text: string
+}
+
 export function useSerial(sampleIntervalMs = 2000) {
   const [ports, setPorts] = useState<SerialPortInfo[]>([])
   const [selectedPort, setSelectedPort] = useState<string>('')
   const [status, setStatus] = useState<ConnectionStatus>({ state: 'disconnected' })
   const [lastFrame, setLastFrame] = useState<SensorFrame | null>(null)
   const [history, setHistory] = useState<QualityPoint[]>([])
+  const [serialLines, setSerialLines] = useState<SerialLogLine[]>([])
 
   const recordsRef = useRef<SensorFrame[]>([])
   const lastSampleAtRef = useRef<number>(0)
@@ -121,6 +128,11 @@ export function useSerial(sampleIntervalMs = 2000) {
       setStatus(s)
       if (s.portPath) setSelectedPort(s.portPath)
     })
+    const unsubRawLine = api.onRawLine((line) => {
+      setSerialLines((prev) =>
+        [...prev, { id: `${line.receivedAt}-${prev.length}`, ts: line.receivedAt, text: line.text }].slice(-200),
+      )
+    })
     const unsubFrame = api.onFrame((frame) => {
       recordsRef.current = [...recordsRef.current, frame].slice(-5000)
 
@@ -144,6 +156,7 @@ export function useSerial(sampleIntervalMs = 2000) {
     return () => {
       clearInterval(interval)
       unsubStatus()
+      unsubRawLine()
       unsubFrame()
     }
   }, [api, refreshPorts, sampleIntervalMs])
@@ -161,6 +174,7 @@ export function useSerial(sampleIntervalMs = 2000) {
     status,
     lastFrame,
     history,
+    serialLines,
     refreshPorts,
     connect,
     disconnect,

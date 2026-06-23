@@ -1,6 +1,6 @@
 import { animate, motion, useMotionValue, useTransform } from 'framer-motion'
 import { useEffect } from 'react'
-import { getQualityTone } from '../lib/airQuality'
+import { getQualityTone, vocToPPM } from '../lib/airQuality'
 import { formatNumber } from '../lib/format'
 
 type Props = {
@@ -17,6 +17,7 @@ export function VOCGauge({ title, vocCalibrado, quality }: Props) {
   const p = Math.max(0, Math.min(100, quality.percent))
   const offset = c - (p / 100) * c
   const tone = getQualityTone(quality.label)
+  const ppm = vocToPPM(vocCalibrado)
 
   const percentMv = useMotionValue(0)
   const percentText = useTransform(percentMv, (v) => `${Math.round(v)}%`)
@@ -37,7 +38,7 @@ export function VOCGauge({ title, vocCalibrado, quality }: Props) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-sm font-semibold text-slate-900">{title}</div>
-          <div className="mt-1 text-xs text-slate-500">Indicador baseado em VOC calibrado</div>
+          <div className="mt-1 text-xs text-slate-500">Indicador baseado em PPM</div>
         </div>
         <div className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${tone.text} ring-slate-200 bg-slate-50`}>
           {quality.label}
@@ -98,21 +99,22 @@ export function VOCGauge({ title, vocCalibrado, quality }: Props) {
               </div>
               <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[11px] text-slate-600">
                 <div>
-                  <span className="font-semibold">100+</span> = Excelente
+                  <span className="font-semibold">0-65 ppm</span> = Excelente
                 </div>
                 <div>
-                  <span className="font-semibold">60–100</span> = Boa
+                  <span className="font-semibold">66-150 ppm</span> = Boa
                 </div>
                 <div>
-                  <span className="font-semibold">30–60</span> = Moderada
+                  <span className="font-semibold">151-300 ppm</span> = Moderada
                 </div>
                 <div>
-                  <span className="font-semibold">10–30</span> = Ruim
+                  <span className="font-semibold">301-500 ppm</span> = Ruim
                 </div>
                 <div className="col-span-2">
-                  <span className="font-semibold">0–10</span> = Muito Ruim
+                  <span className="font-semibold">&gt;500 ppm</span> = Muito Ruim
                 </div>
               </div>
+              <div className="mt-3 text-[11px] text-slate-500">PPM calculado internamente: {ppm} ppm</div>
             </div>
           </div>
         </div>

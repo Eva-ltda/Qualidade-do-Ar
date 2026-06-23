@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events'
 import { SerialPort } from 'serialport'
 import { ReadlineParser } from '@serialport/parser-readline'
-import type { ConnectionStatus, SensorFrame } from './types'
+import type { ConnectionStatus, SensorFrame, SerialRawLine } from './types'
 
 type SerialManagerEvents = {
   frame: (frame: SensorFrame) => void
+  rawLine: (line: SerialRawLine) => void
   status: (status: ConnectionStatus) => void
 }
 
@@ -75,10 +76,14 @@ export class SerialManager extends EventEmitter {
     const parser = port.pipe(new ReadlineParser({ delimiter: '\n' }))
     parser.on('data', (line: string) => {
       const trimmed = String(line ?? '').trim()
+      if (!trimmed) return
+
+      const now = Date.now()
+      this.emit('rawLine', { text: trimmed, receivedAt: now })
+
       const frame = this.parseFrame(trimmed)
       if (!frame) return
 
-      const now = Date.now()
       this.setStatus({ state: 'connected', portPath, lastReceivedAt: now })
       this.emit('frame', { ...frame, receivedAt: now })
     })

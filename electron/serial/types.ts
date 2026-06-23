@@ -17,6 +17,11 @@ export type SensorFrame = {
   receivedAt: number
 }
 
+export type SerialRawLine = {
+  text: string
+  receivedAt: number
+}
+
 export type ConnectionStatus = {
   state: SerialConnectionState
   portPath?: string

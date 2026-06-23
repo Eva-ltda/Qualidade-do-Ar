@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ConnectionStatus, SensorFrame } from './serial/types'
+import type { ConnectionStatus, SensorFrame, SerialRawLine } from './serial/types'
 
 type PortInfo = {
   path: string
@@ -40,6 +40,11 @@ const api = {
     const listener = (_e: unknown, payload: SensorFrame) => handler(payload)
     ipcRenderer.on('serial:frame', listener)
     return () => ipcRenderer.removeListener('serial:frame', listener)
+  },
+  onRawLine(handler: (line: SerialRawLine) => void): Unsubscribe {
+    const listener = (_e: unknown, payload: SerialRawLine) => handler(payload)
+    ipcRenderer.on('serial:rawLine', listener)
+    return () => ipcRenderer.removeListener('serial:rawLine', listener)
   },
   onStatus(handler: (status: ConnectionStatus) => void): Unsubscribe {
     const listener = (_e: unknown, payload: ConnectionStatus) => handler(payload)

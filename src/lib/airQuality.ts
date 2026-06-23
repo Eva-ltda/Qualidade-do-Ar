@@ -11,11 +11,12 @@ export function vocToPPM(voc: number) {
 }
 
 export function getAirQualityFromVoc(voc: number): AirQuality {
+  const ppm = vocToPPM(voc)
   if (!Number.isFinite(voc) || voc <= 0) return { label: 'Muito Ruim', percent: 0 }
-  if (voc > 100) return { label: 'Excelente', percent: 92 }
-  if (voc > 60) return { label: 'Boa', percent: 74 }
-  if (voc > 30) return { label: 'Moderada', percent: 52 }
-  if (voc > 10) return { label: 'Ruim', percent: 28 }
+  if (ppm <= 65) return { label: 'Excelente', percent: 92 }
+  if (ppm <= 150) return { label: 'Boa', percent: 74 }
+  if (ppm <= 300) return { label: 'Moderada', percent: 52 }
+  if (ppm <= 500) return { label: 'Ruim', percent: 28 }
   return { label: 'Muito Ruim', percent: 12 }
 }
 

@@ -83,9 +83,11 @@ var SerialManager = class extends import_node_events.EventEmitter {
     const parser = port.pipe(new import_parser_readline.ReadlineParser({ delimiter: "\n" }));
     parser.on("data", (line) => {
       const trimmed = String(line ?? "").trim();
+      if (!trimmed) return;
+      const now = Date.now();
+      this.emit("rawLine", { text: trimmed, receivedAt: now });
       const frame = this.parseFrame(trimmed);
       if (!frame) return;
-      const now = Date.now();
       this.setStatus({ state: "connected", portPath, lastReceivedAt: now });
       this.emit("frame", { ...frame, receivedAt: now });
     });
@@ -304,6 +306,9 @@ serial.on("status", (status) => {
 });
 serial.on("frame", (frame) => {
   broadcast("serial:frame", frame);
+});
+serial.on("rawLine", (line) => {
+  broadcast("serial:rawLine", line);
 });
 import_electron2.app.whenReady().then(async () => {
   registerIpc();

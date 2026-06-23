@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { SerialManager } from './serial/SerialManager'
 import { readSettings, writeSettings } from './settings'
-import type { ConnectionStatus, SensorFrame } from './serial/types'
+import type { ConnectionStatus, SensorFrame, SerialRawLine } from './serial/types'
 
 const serial = new SerialManager()
 
@@ -110,6 +110,10 @@ serial.on('status', (status: ConnectionStatus) => {
 
 serial.on('frame', (frame: SensorFrame) => {
   broadcast('serial:frame', frame)
+})
+
+serial.on('rawLine', (line: SerialRawLine) => {
+  broadcast('serial:rawLine', line)
 })
 
 app.whenReady().then(async () => {

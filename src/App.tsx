@@ -74,7 +74,7 @@ function App() {
     return Math.max(1, updateValue) * unitMs
   }, [updateUnit, updateValue])
 
-  const { ports, selectedPort, setSelectedPort, status, lastFrame, history, refreshPorts, connect, exportCsv } =
+  const { ports, selectedPort, setSelectedPort, status, lastFrame, history, serialLines, refreshPorts, connect, exportCsv } =
     useSerial(updateIntervalMs)
 
   const vocInternoCorrigido = lastFrame?.vocInternoCorrigido ?? lastFrame?.vocInterno ?? Number.NaN
@@ -150,7 +150,7 @@ function App() {
             <HistoryChart data={history} />
           </div>
           <div className="col-span-12 xl:col-span-4">
-            <StatusPanel internalLabel={qi.label} externalLabel={qe.label} />
+            <StatusPanel portPath={status.portPath} status={status} lines={serialLines} />
           </div>
 
           <div className="col-span-12">

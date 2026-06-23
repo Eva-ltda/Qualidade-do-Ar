@@ -24,6 +24,11 @@ var api = {
     import_electron.ipcRenderer.on("serial:frame", listener);
     return () => import_electron.ipcRenderer.removeListener("serial:frame", listener);
   },
+  onRawLine(handler) {
+    const listener = (_e, payload) => handler(payload);
+    import_electron.ipcRenderer.on("serial:rawLine", listener);
+    return () => import_electron.ipcRenderer.removeListener("serial:rawLine", listener);
+  },
   onStatus(handler) {
     const listener = (_e, payload) => handler(payload);
     import_electron.ipcRenderer.on("serial:status", listener);
