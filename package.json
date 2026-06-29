@@ -1,7 +1,7 @@
 {
   "name": "voc",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
@@ -10,11 +10,13 @@
     "gen:icon": "node scripts/generate-icon.mjs",
     "build:renderer": "vite build",
     "build:electron": "tsup",
+    "build:win": "powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1",
     "build": "npm run typecheck && npm run build:renderer && npm run build:electron && npm run gen:icon && electron-builder",
     "lint": "eslint ."
   },
   "dependencies": {
     "@serialport/parser-readline": "^13.0.0",
+    "electron-updater": "^6.8.9",
     "framer-motion": "^12.23.12",
     "lucide-react": "^0.542.0",
     "react": "^19.2.6",
@@ -36,9 +38,9 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
+    "jimp": "^1.6.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
-    "jimp": "^1.6.0",
     "to-ico": "^1.1.5",
     "tsup": "^8.5.1",
     "typescript": "~6.0.2",
@@ -51,6 +53,14 @@
     "productName": "EVA Dashboard Qualidade do Ar",
     "asar": true,
     "npmRebuild": false,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Eva-ltda",
+        "repo": "Qualidade-do-Ar",
+        "releaseType": "release"
+      }
+    ],
     "directories": {
       "output": "release"
     },
@@ -58,6 +68,7 @@
       "dist/**",
       "dist-electron/**",
       "electron/**",
+      "telegram.secret.json",
       "Logo.png",
       "build/icon.ico",
       "package.json"

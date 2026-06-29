@@ -38,25 +38,13 @@ jobs:
       - name: Generate icon
         run: npm run gen:icon
 
-      - name: Package (electron-builder)
-        run: npx electron-builder --win --x64 --publish never
+      - name: Package and publish (electron-builder)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --x64 --publish always
 
       - name: List release output
         shell: pwsh
         run: |
           if (Test-Path release) { Get-ChildItem -Recurse release | Select-Object FullName, Length }
           else { Write-Host "Diretório release/ não encontrado" }
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-win-x64
-          path: release/**
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release/**/*.exe
-            release/**/*.yml
-            release/**/*.blockmap

@@ -1,5 +1,6 @@
 import { Thermometer, Droplets, Gauge, Leaf } from 'lucide-react'
 import { Header } from './components/Header'
+import { NotificationPanel } from './components/NotificationPanel'
 import { SensorCard } from './components/SensorCard'
 import { VOCGauge } from './components/VOCGauge'
 import { StatusPanel } from './components/StatusPanel'
@@ -86,6 +87,7 @@ function App() {
     refreshPorts,
     connect,
     exportCsv,
+    backupCsv,
   } =
     useSerial(updateIntervalMs)
 
@@ -104,6 +106,7 @@ function App() {
         selectedPort={selectedPort}
         onSelectPort={setSelectedPort}
         onRefreshPorts={refreshPorts}
+        onBackup={() => backupCsv()}
         onExport={() => exportCsv()}
         onConnect={connect}
         status={status}
@@ -163,6 +166,10 @@ function App() {
           </div>
           <div className="col-span-12 xl:col-span-4">
             <StatusPanel portPath={status.portPath} status={status} lines={serialLines} onClear={clearSerialLines} />
+          </div>
+
+          <div className="col-span-12">
+            <NotificationPanel />
           </div>
 
           <div className="col-span-12">

@@ -51,6 +51,7 @@ type Props = {
   onSelectPort: (portPath: string) => void
   onRefreshPorts: () => void
   onExport: () => void
+  onBackup: () => void
   onConnect: (portPath?: string) => void
   status: ConnectionStatus
   lastReceivedAt?: number
@@ -67,6 +68,7 @@ export function Header({
   onSelectPort,
   onRefreshPorts,
   onExport,
+  onBackup,
   onConnect,
   status,
   lastReceivedAt,
@@ -139,6 +141,14 @@ export function Header({
 
           <div className="flex w-[560px] flex-col items-end gap-3">
             <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={onBackup}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-card transition hover:bg-emerald-500"
+              >
+                <Download className="h-4 w-4" />
+                Backup
+              </button>
               <button
                 type="button"
                 onClick={onExport}

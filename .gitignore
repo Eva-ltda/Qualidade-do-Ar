@@ -9,9 +9,17 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-electron
 dist-ssr
 *.local
 build/
+release/
+release-local/
+.electron-cache/
+.electron-builder-cache/
+builder-effective-config.yaml
+builder-debug.yml
+telegram.secret.json
 
 # Editor directories and files
 .vscode/*

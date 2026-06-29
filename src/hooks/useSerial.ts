@@ -26,42 +26,7 @@ export function useSerial(sampleIntervalMs = 2000) {
   const lastSampleAtRef = useRef<number>(0)
   const api = (window as unknown as { eva?: Window['eva'] }).eva
 
-  const refreshPorts = useCallback(async () => {
-    if (!api) return
-    try {
-      const next = await api.listPorts()
-      setPorts(next)
-      if (!selectedPort) {
-        const last = await api.getLastPort()
-        if (last) setSelectedPort(last)
-      }
-    } catch {
-      setPorts([])
-    }
-  }, [api, selectedPort])
-
-  const connect = useCallback(
-    async (portPath?: string) => {
-      if (!api) return
-      const pathToUse = portPath ?? selectedPort
-      if (!pathToUse) return
-      await api.connect(pathToUse)
-    },
-    [api, selectedPort],
-  )
-
-  const disconnect = useCallback(async () => {
-    if (!api) return
-    await api.disconnect()
-  }, [api])
-
-  const clearSerialLines = useCallback(() => {
-    setSerialLines([])
-  }, [])
-
-  const exportCsv = useCallback(async () => {
-    if (!api) return { ok: false, error: 'API indisponível' } as ExportResult
-    const rows = recordsRef.current
+  const buildCsvText = useCallback((rows: SensorFrame[], includeMetadata = false) => {
     const delimiter = ';'
 
     const escapeCsv = (value: string) => {
@@ -105,9 +70,73 @@ export function useSerial(sampleIntervalMs = 2000) {
       ].join(delimiter),
     )
 
-    const csvText = ['sep=;', header, ...lines].join('\r\n')
-    return api.exportCsv(csvText)
+    if (!includeMetadata) {
+      return ['sep=;', header, ...lines].join('\r\n')
+    }
+
+    const firstRow = rows[0]
+    const lastRow = rows[rows.length - 1]
+    const metadata = [
+      'sep=;',
+      ['tipo', 'backup_completo'].join(delimiter),
+      ['primeiro_dado_iso', escapeCsv(firstRow ? new Date(firstRow.receivedAt).toISOString() : '')].join(delimiter),
+      ['ultimo_dado_iso', escapeCsv(lastRow ? new Date(lastRow.receivedAt).toISOString() : '')].join(delimiter),
+      ['total_registros', String(rows.length)].join(delimiter),
+      '',
+    ]
+
+    return [...metadata, header, ...lines].join('\r\n')
+  }, [])
+
+  const refreshPorts = useCallback(async () => {
+    if (!api) return
+    try {
+      const next = await api.listPorts()
+      setPorts(next)
+      if (!selectedPort) {
+        const last = await api.getLastPort()
+        if (last) setSelectedPort(last)
+      }
+    } catch {
+      setPorts([])
+    }
+  }, [api, selectedPort])
+
+  const connect = useCallback(
+    async (portPath?: string) => {
+      if (!api) return
+      const pathToUse = portPath ?? selectedPort
+      if (!pathToUse) return
+      await api.connect(pathToUse)
+    },
+    [api, selectedPort],
+  )
+
+  const disconnect = useCallback(async () => {
+    if (!api) return
+    await api.disconnect()
   }, [api])
+
+  const clearSerialLines = useCallback(() => {
+    setSerialLines([])
+  }, [])
+
+  const exportCsv = useCallback(async () => {
+    if (!api) return { ok: false, error: 'API indisponível' } as ExportResult
+    const rows = recordsRef.current
+    if (rows.length === 0) return { ok: false, error: 'Nenhum dado disponível para exportação' } as ExportResult
+    const csvText = buildCsvText(rows)
+    return api.exportCsv(csvText)
+  }, [api, buildCsvText])
+
+  const backupCsv = useCallback(async () => {
+    if (!api) return { ok: false, error: 'API indisponível' } as ExportResult
+    const rows = recordsRef.current
+    if (rows.length === 0) return { ok: false, error: 'Nenhum dado disponível para backup' } as ExportResult
+
+    const csvText = buildCsvText(rows, true)
+    return api.backupCsv(csvText)
+  }, [api, buildCsvText])
 
   useEffect(() => {
     if (!api) return
@@ -138,7 +167,7 @@ export function useSerial(sampleIntervalMs = 2000) {
       )
     })
     const unsubFrame = api.onFrame((frame) => {
-      recordsRef.current = [...recordsRef.current, frame].slice(-5000)
+      recordsRef.current.push(frame)
 
       const now = frame.receivedAt
       const lastSampleAt = lastSampleAtRef.current
@@ -184,5 +213,6 @@ export function useSerial(sampleIntervalMs = 2000) {
     connect,
     disconnect,
     exportCsv,
+    backupCsv,
   }
 }

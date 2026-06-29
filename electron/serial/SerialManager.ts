@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { SerialPort } from 'serialport'
 import { ReadlineParser } from '@serialport/parser-readline'
-import type { ConnectionStatus, SensorFrame, SerialRawLine } from './types'
+import type { ConnectionStatus, SensorFrame, SerialRawLine } from './types.js'
 
 type SerialManagerEvents = {
   frame: (frame: SensorFrame) => void

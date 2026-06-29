@@ -10,6 +10,18 @@ var api = {
   getLastPort() {
     return import_electron.ipcRenderer.invoke("serial:getLastPort");
   },
+  getNotificationSettings() {
+    return import_electron.ipcRenderer.invoke("notifications:getSettings");
+  },
+  getNotificationRuntimeState() {
+    return import_electron.ipcRenderer.invoke("notifications:getRuntimeState");
+  },
+  saveNotificationSettings(settings) {
+    return import_electron.ipcRenderer.invoke("notifications:saveSettings", settings);
+  },
+  testNotification(settings) {
+    return import_electron.ipcRenderer.invoke("notifications:testNotification", settings);
+  },
   connect(portPath) {
     return import_electron.ipcRenderer.invoke("serial:connect", portPath);
   },
@@ -18,6 +30,9 @@ var api = {
   },
   exportCsv(csvText) {
     return import_electron.ipcRenderer.invoke("data:exportCsv", csvText);
+  },
+  backupCsv(csvText) {
+    return import_electron.ipcRenderer.invoke("data:backupCsv", csvText);
   },
   onFrame(handler) {
     const listener = (_e, payload) => handler(payload);
@@ -33,6 +48,11 @@ var api = {
     const listener = (_e, payload) => handler(payload);
     import_electron.ipcRenderer.on("serial:status", listener);
     return () => import_electron.ipcRenderer.removeListener("serial:status", listener);
+  },
+  onNotificationRuntimeState(handler) {
+    const listener = (_e, payload) => handler(payload);
+    import_electron.ipcRenderer.on("notifications:runtimeState", listener);
+    return () => import_electron.ipcRenderer.removeListener("notifications:runtimeState", listener);
   }
 };
 import_electron.contextBridge.exposeInMainWorld("eva", api);
