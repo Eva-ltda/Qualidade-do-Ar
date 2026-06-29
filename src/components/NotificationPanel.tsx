@@ -162,33 +162,6 @@ export function NotificationPanel() {
       </div>
 
       <div className="mt-4 grid max-w-3xl grid-cols-1 gap-4 md:grid-cols-3">
-        <div className="md:col-span-2">
-          <div className="text-[11px] font-medium text-slate-500">Numero de telefone</div>
-          <input
-            type="text"
-            value={settings.phoneNumber}
-            onChange={(e) => setSettings((prev) => ({ ...prev, phoneNumber: e.target.value }))}
-            placeholder="+5511999999999"
-            className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-slate-900/10"
-          />
-        </div>
-
-        <div>
-          <div className="text-[11px] font-medium text-slate-500">Intervalo da notificacao</div>
-          <div className="mt-1 flex h-10 items-center rounded-xl border border-slate-200 bg-white px-3">
-            <input
-              type="number"
-              min={1}
-              value={settings.heartbeatIntervalMinutes}
-              onChange={(e) =>
-                setSettings((prev) => ({ ...prev, heartbeatIntervalMinutes: Number(e.target.value) || 1 }))
-              }
-              className="w-20 bg-transparent text-sm font-semibold text-slate-900 outline-none"
-            />
-            <span className="text-sm text-slate-500">minutos</span>
-          </div>
-        </div>
-
         <div>
           <div className="text-[11px] font-medium text-slate-500">Considerar parada apos</div>
           <div className="mt-1 flex h-10 items-center rounded-xl border border-slate-200 bg-white px-3">
@@ -209,7 +182,7 @@ export function NotificationPanel() {
       <div className="mt-4 rounded-xl bg-slate-50 p-3 text-[11px] text-slate-600 ring-1 ring-slate-200">
         <div>O app envia notificacoes no Telegram quando a coleta iniciar, continuar ativa e quando ficar sem dados.</div>
         <div className="mt-1">Para vincular, no Telegram envie: /registrar EVA</div>
-        <div className="mt-1">Opcional: voce tambem pode vincular compartilhando seu contato (telefone) com o bot.</div>
+        <div className="mt-1">Para ajustar o intervalo individual, use no Telegram: /notificar 1 min ate /notificar 60 min.</div>
         <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
           Aviso: se o dashboard estiver fechado ou sem conexao com a internet, o bot nao consegue emitir notificacoes.
         </div>
@@ -242,7 +215,7 @@ export function NotificationPanel() {
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <div className="text-xs text-slate-500">
-          {loading ? 'Carregando configuracoes...' : feedback || 'Informe os dados e clique em salvar.'}
+          {loading ? 'Carregando configuracoes...' : feedback || 'Ajuste o tempo de parada e clique em salvar.'}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
