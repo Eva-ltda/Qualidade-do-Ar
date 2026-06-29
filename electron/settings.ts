@@ -6,6 +6,7 @@ export type NotificationSettings = {
   enabled: boolean
   phoneNumber: string
   chatId?: string
+  chatIds?: string[]
   heartbeatIntervalMinutes: number
   staleTimeoutSeconds: number
 }
@@ -19,6 +20,7 @@ export const defaultNotificationSettings: NotificationSettings = {
   enabled: false,
   phoneNumber: '',
   chatId: undefined,
+  chatIds: [],
   heartbeatIntervalMinutes: 60,
   staleTimeoutSeconds: 60,
 }
@@ -27,10 +29,19 @@ export function normalizeNotificationSettings(input?: Partial<NotificationSettin
   const phoneNumber = String(input?.phoneNumber ?? '').trim()
   const chatIdRaw = input?.chatId
   const chatId = chatIdRaw === undefined || chatIdRaw === null ? undefined : String(chatIdRaw).trim() || undefined
+  const chatIds = Array.from(
+    new Set(
+      (Array.isArray(input?.chatIds) ? input?.chatIds : [])
+        .map((value) => String(value ?? '').trim())
+        .filter(Boolean)
+        .concat(chatId ? [chatId] : []),
+    ),
+  )
   return {
-    enabled: input?.enabled === undefined ? Boolean(chatId) : Boolean(input.enabled),
+    enabled: input?.enabled === undefined ? chatIds.length > 0 : Boolean(input.enabled),
     phoneNumber,
-    chatId,
+    chatId: chatIds[0],
+    chatIds,
     heartbeatIntervalMinutes: Math.max(1, Number(input?.heartbeatIntervalMinutes) || defaultNotificationSettings.heartbeatIntervalMinutes),
     staleTimeoutSeconds: Math.max(5, Number(input?.staleTimeoutSeconds) || defaultNotificationSettings.staleTimeoutSeconds),
   }

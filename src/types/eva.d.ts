@@ -5,6 +5,7 @@ declare global {
     enabled: boolean
     phoneNumber: string
     chatId?: string
+    chatIds?: string[]
     heartbeatIntervalMinutes: number
     staleTimeoutSeconds: number
   }

@@ -6,6 +6,7 @@ const defaultSettings: NotificationSettings = {
   enabled: false,
   phoneNumber: '',
   chatId: undefined,
+  chatIds: [],
   heartbeatIntervalMinutes: 60,
   staleTimeoutSeconds: 60,
 }
@@ -54,7 +55,7 @@ export function NotificationPanel() {
   }
 
   const getNextNotificationLabel = () => {
-    if (!settings.chatId) return 'Aguardando vinculacao no Telegram'
+    if (!(settings.chatIds?.length || settings.chatId)) return 'Aguardando vinculacao no Telegram'
     if (runtimeState.nextNotificationAt) return formatDateTime(runtimeState.nextNotificationAt)
     if (runtimeState.collectionState === 'coletando') return 'Aguardando proximo intervalo'
     if (runtimeState.collectionState === 'parada') return 'Aguardando retomada da coleta'
@@ -92,7 +93,7 @@ export function NotificationPanel() {
     })
     const unsubscribeSettings = api.onNotificationSettings((nextSettings) => {
       setSettings(nextSettings)
-      setFeedback(nextSettings.chatId ? 'Telegram vinculado com sucesso.' : '')
+      setFeedback((nextSettings.chatIds?.length || nextSettings.chatId) ? 'Telegram vinculado com sucesso.' : '')
     })
 
     return () => {
@@ -109,12 +110,12 @@ export function NotificationPanel() {
     try {
       const saved = await api.saveNotificationSettings({
         ...settings,
-        enabled: Boolean(settings.chatId),
+        enabled: Boolean(settings.chatIds?.length || settings.chatId),
         heartbeatIntervalMinutes: Math.max(1, Number(settings.heartbeatIntervalMinutes) || 60),
         staleTimeoutSeconds: Math.max(5, Number(settings.staleTimeoutSeconds) || 60),
       })
       setSettings(saved)
-      setFeedback(saved.enabled ? 'Numero salvo e notificacoes ativas.' : 'Numero salvo. Aguardando vinculacao no Telegram.')
+      setFeedback(saved.enabled ? 'Configuracoes salvas e notificacoes ativas.' : 'Configuracoes salvas. Aguardando vinculacao no Telegram.')
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : 'Falha ao salvar as configuracoes de notificacao.')
     } finally {
@@ -221,7 +222,9 @@ export function NotificationPanel() {
         </div>
         <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
           <div className="text-[11px] font-medium text-slate-500">Vinculacao</div>
-          <div className="mt-1 text-sm font-semibold text-slate-900">{settings.chatId ? 'Vinculado' : 'Nao vinculado'}</div>
+          <div className="mt-1 text-sm font-semibold text-slate-900">
+            {(settings.chatIds?.length || settings.chatId) ? `Vinculado (${settings.chatIds?.length ?? (settings.chatId ? 1 : 0)} chats)` : 'Nao vinculado'}
+          </div>
         </div>
         <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
           <div className="text-[11px] font-medium text-slate-500">Ultimo envio</div>

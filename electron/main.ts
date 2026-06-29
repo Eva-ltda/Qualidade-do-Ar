@@ -26,6 +26,8 @@ type NotificationRuntimeState = {
   collectionState: 'aguardando' | 'coletando' | 'parada'
 }
 
+const ALLOWED_NOTIFY_INTERVALS = [5, 15, 30, 60] as const
+
 let notificationRuntimeState: NotificationRuntimeState = {
   collectionState: 'aguardando',
 }
@@ -90,6 +92,60 @@ function vocToPPM(voc: number) {
   return Math.max(0, Math.round(mapRange(voc, previous.voc, last.voc, previous.ppm, last.ppm)))
 }
 
+function getAirQualityLabelFromVoc(voc: number) {
+  const ppm = vocToPPM(voc)
+  if (ppm <= 65) return 'Excelente'
+  if (ppm <= 150) return 'Boa'
+  if (ppm <= 300) return 'Moderada'
+  if (ppm <= 500) return 'Ruim'
+  return 'Muito Ruim'
+}
+
+function buildTelegramMenuMessage() {
+  return [
+    '🤖 EVA Cortex - Menu Principal',
+    '',
+    'Bem-vindo ao sistema de notificações da EVA Cortex.',
+    '',
+    '📋 Comandos disponíveis:',
+    '',
+    '/menu',
+    'Exibe este menu de comandos.',
+    '',
+    '/registrar_eva',
+    'Conecta sua EVA ao Telegram.',
+    '',
+    '/datavoc',
+    'Mostra os últimos dados coletados:',
+    '• VOC',
+    '• Temperatura',
+    '• Umidade',
+    '• Qualidade do ar',
+    '',
+    '/notificar',
+    'Configura o intervalo das notificações.',
+    'Exemplo:',
+    '5 min, 15 min, 30 min, 60 min.',
+    '',
+    '/backup',
+    'Solicita o último backup disponível da coleta.',
+    '',
+    '/print',
+    'Envia uma captura da tela atual da EVA.',
+    '',
+    '━━━━━━━━━━━━━━',
+    '',
+    '📊 Status do monitoramento:',
+    'Use /datavoc para consultar os dados atuais.',
+    '',
+    '🔔 Notificações:',
+    'Use /notificar para escolher o intervalo dos avisos.',
+    '',
+    '🛠 EVA Cortex',
+    'Monitoramento Inteligente da Qualidade do Ar.',
+  ].join('\n')
+}
+
 function buildTelegramVocDataMessage() {
   if (!lastSensorFrame) {
     return '💾 Dados:\nNenhum dado de coleta foi recebido ainda.'
@@ -99,18 +155,28 @@ function buildTelegramVocDataMessage() {
   const vocExterno = lastSensorFrame.vocExternoCorrigido
   const ppmInterno = vocToPPM(vocInterno)
   const ppmExterno = vocToPPM(vocExterno)
+  const qualidadeInterna = getAirQualityLabelFromVoc(vocInterno)
+  const qualidadeExterna = getAirQualityLabelFromVoc(vocExterno)
 
   return [
     '💾 Dados:',
     `Voc interno: ${formatNumberPtBr(vocInterno, 1)}`,
     `ppm interno: ${ppmInterno}`,
+    `Temperatura interna: ${formatNumberPtBr(lastSensorFrame.tempInterno, 1)} °C`,
     `Umidade: ${formatNumberPtBr(lastSensorFrame.humInterno, 0)}`,
+    `Qualidade do ar: ${qualidadeInterna}`,
     '',
     '---------------',
     `Voc externo: ${formatNumberPtBr(vocExterno, 1)}`,
     `ppm externo: ${ppmExterno}`,
+    `Temperatura externa: ${formatNumberPtBr(lastSensorFrame.tempExterno, 1)} °C`,
     `Umidade: ${formatNumberPtBr(lastSensorFrame.humExterno, 0)}`,
+    `Qualidade do ar: ${qualidadeExterna}`,
   ].join('\n')
+}
+
+function getBackupDirectory() {
+  return path.join(app.getPath('documents'), 'EVA Cortex', 'backups')
 }
 
 function buildBackupCsvText(rows: SensorFrame[]) {
@@ -176,7 +242,7 @@ function saveAutomaticBackup(rows: SensorFrame[], stoppedAt: number) {
     return { ok: false as const, error: 'Nenhum dado disponível para backup.' }
   }
 
-  const backupDir = path.join(app.getPath('documents'), 'EVA Cortex', 'backups')
+  const backupDir = getBackupDirectory()
   const timestamp = new Date(stoppedAt).toISOString().replace(/[:.]/g, '-')
   const filePath = path.join(backupDir, `backup_automatico_${timestamp}.csv`)
 
@@ -184,6 +250,38 @@ function saveAutomaticBackup(rows: SensorFrame[], stoppedAt: number) {
   fs.writeFileSync(filePath, buildBackupCsvText(rows), 'utf8')
 
   return { ok: true as const, filePath }
+}
+
+function saveRequestedBackup(rows: SensorFrame[], requestedAt: number) {
+  if (rows.length === 0) {
+    return { ok: false as const, error: 'Nenhum dado disponível para backup.' }
+  }
+
+  const backupDir = getBackupDirectory()
+  const timestamp = new Date(requestedAt).toISOString().replace(/[:.]/g, '-')
+  const filePath = path.join(backupDir, `backup_solicitado_${timestamp}.csv`)
+
+  fs.mkdirSync(backupDir, { recursive: true })
+  fs.writeFileSync(filePath, buildBackupCsvText(rows), 'utf8')
+
+  return { ok: true as const, filePath }
+}
+
+function findLatestBackupFile() {
+  const backupDir = getBackupDirectory()
+  if (!fs.existsSync(backupDir)) return undefined
+
+  const latest = fs
+    .readdirSync(backupDir)
+    .filter((fileName) => fileName.toLowerCase().endsWith('.csv'))
+    .map((fileName) => {
+      const filePath = path.join(backupDir, fileName)
+      const stats = fs.statSync(filePath)
+      return { filePath, mtimeMs: stats.mtimeMs }
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
+
+  return latest?.filePath
 }
 
 function normalizePhoneNumber(value: string) {
@@ -265,18 +363,40 @@ function getTelegramDefaultChatId() {
   return getTelegramSecret().chatId
 }
 
-function canSendNotificationWithSettings(settings = notificationSettings) {
-  return settings.enabled && Boolean(settings.chatId) && Boolean(getTelegramBotToken())
+function getLinkedChatIds(settings = notificationSettings) {
+  return Array.from(
+    new Set(
+      [settings.chatId, ...(settings.chatIds ?? [])]
+        .map((value) => String(value ?? '').trim())
+        .filter(Boolean),
+    ),
+  )
 }
 
-async function sendTelegramMessage(text: string, settingsOverride = notificationSettings) {
+function withLinkedChatId(settings: typeof notificationSettings, chatId: string) {
+  const normalizedChatId = String(chatId ?? '').trim()
+  const chatIds = Array.from(new Set([...getLinkedChatIds(settings), normalizedChatId].filter(Boolean)))
+  return normalizeNotificationSettings({
+    ...settings,
+    chatId: chatIds[0],
+    chatIds,
+    enabled: chatIds.length > 0,
+  })
+}
+
+function canSendNotificationWithSettings(settings = notificationSettings) {
+  return settings.enabled && getLinkedChatIds(settings).length > 0 && Boolean(getTelegramBotToken())
+}
+
+async function sendTelegramMessage(text: string, chatId: string) {
   const token = getTelegramBotToken()
   if (!token) {
     throw new Error('Token do Telegram nao configurado.')
   }
 
-  if (!settingsOverride.chatId) {
-    throw new Error('Nao vinculado. Abra o bot no Telegram, clique em Start e compartilhe seu contato (telefone) com o bot.')
+  const targetChatId = String(chatId ?? '').trim()
+  if (!targetChatId) {
+    throw new Error('Nenhum chat do Telegram vinculado.')
   }
 
   const url = `https://api.telegram.org/bot${token}/sendMessage`
@@ -284,9 +404,53 @@ async function sendTelegramMessage(text: string, settingsOverride = notification
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      chat_id: settingsOverride.chatId,
+      chat_id: targetChatId,
       text,
     }),
+  })
+
+  const payload = (await response.json().catch(() => null)) as
+    | { ok: true; result?: unknown }
+    | { ok: false; description?: string; error_code?: number }
+    | null
+
+  if (!response.ok || !payload || (payload as { ok: boolean }).ok === false) {
+    const description =
+      payload && 'description' in payload && payload.description ? payload.description : `Falha HTTP ${response.status}`
+    const code = payload && 'error_code' in payload && payload.error_code ? ` (${payload.error_code})` : ''
+    throw new Error(`${description}${code}`)
+  }
+}
+
+async function sendTelegramFile(
+  method: 'sendDocument' | 'sendPhoto',
+  fieldName: 'document' | 'photo',
+  filePath: string,
+  chatId: string,
+  caption?: string,
+) {
+  const token = getTelegramBotToken()
+  if (!token) {
+    throw new Error('Token do Telegram nao configurado.')
+  }
+
+  const targetChatId = String(chatId ?? '').trim()
+  if (!targetChatId) {
+    throw new Error('Nenhum chat do Telegram vinculado.')
+  }
+
+  const fileBuffer = fs.readFileSync(filePath)
+  const form = new FormData()
+  form.set('chat_id', targetChatId)
+  if (caption) {
+    form.set('caption', caption)
+  }
+  form.append(fieldName, new Blob([fileBuffer]), path.basename(filePath))
+
+  const url = `https://api.telegram.org/bot${token}/${method}`
+  const response = await fetch(url, {
+    method: 'POST',
+    body: form,
   })
 
   const payload = (await response.json().catch(() => null)) as
@@ -314,11 +478,88 @@ type TelegramUpdate = {
 let telegramUpdatesOffset = 0
 
 async function handleTelegramDatavocCommand(chatId: string) {
-  await sendTelegramMessage(buildTelegramVocDataMessage(), {
+  await sendTelegramMessage(buildTelegramVocDataMessage(), chatId)
+}
+
+async function handleTelegramMenuCommand(chatId: string) {
+  await sendTelegramMessage(buildTelegramMenuMessage(), chatId)
+}
+
+async function handleTelegramNotifyCommand(chatId: string, intervalMinutes?: number) {
+  if (!intervalMinutes) {
+    await sendTelegramMessage(
+      `🔔 Intervalos disponíveis para notificações:\n${ALLOWED_NOTIFY_INTERVALS.map((value) => `• ${value} min`).join('\n')}\n\nUse: /notificar 15 min`,
+      chatId,
+    )
+    return
+  }
+
+  if (!ALLOWED_NOTIFY_INTERVALS.includes(intervalMinutes as (typeof ALLOWED_NOTIFY_INTERVALS)[number])) {
+    await sendTelegramMessage(
+      `Intervalo inválido. Use apenas: ${ALLOWED_NOTIFY_INTERVALS.map((value) => `${value} min`).join(', ')}.`,
+      chatId,
+    )
+    return
+  }
+
+  notificationSettings = normalizeNotificationSettings({
     ...notificationSettings,
-    chatId,
-    enabled: true,
+    heartbeatIntervalMinutes: intervalMinutes,
+    enabled: getLinkedChatIds(notificationSettings).length > 0,
   })
+  writeSettings({ notifications: notificationSettings })
+  publishNotificationSettings()
+  publishNotificationRuntimeState()
+
+  await sendTelegramMessage(`🔔 Intervalo atualizado com sucesso.\nPróxima atualização a cada ${intervalMinutes} minutos.`, chatId)
+}
+
+async function handleTelegramBackupCommand(chatId: string) {
+  let filePath = findLatestBackupFile()
+
+  if (!filePath && collectionFrames.length > 0) {
+    const created = saveRequestedBackup(collectionFrames, Date.now())
+    if (created.ok) {
+      filePath = created.filePath
+    }
+  }
+
+  if (!filePath) {
+    await sendTelegramMessage('Nenhum backup disponível no momento.', chatId)
+    return
+  }
+
+  const stats = fs.statSync(filePath)
+  const caption = `💾 Backup da coleta\nArquivo: ${path.basename(filePath)}\nData: ${formatDateTimeInlinePtBr(stats.mtimeMs)}`
+  await sendTelegramFile('sendDocument', 'document', filePath, chatId, caption)
+}
+
+async function handleTelegramPrintCommand(chatId: string) {
+  const win = getMainWindow()
+  if (!win) {
+    await sendTelegramMessage('Nao foi possivel capturar a tela da EVA neste momento.', chatId)
+    return
+  }
+
+  const image = await win.webContents.capturePage()
+  const screenshotDir = path.join(app.getPath('temp'), 'eva-cortex')
+  const screenshotPath = path.join(screenshotDir, `print_eva_${Date.now()}.png`)
+  fs.mkdirSync(screenshotDir, { recursive: true })
+  fs.writeFileSync(screenshotPath, image.toPNG())
+
+  try {
+    await sendTelegramFile(
+      'sendPhoto',
+      'photo',
+      screenshotPath,
+      chatId,
+      `🖼 Captura atual da EVA\nData: ${formatDateTimeInlinePtBr(Date.now())}`,
+    )
+  } finally {
+    try {
+      fs.unlinkSync(screenshotPath)
+    } catch {}
+  }
 }
 
 function parseTelegramRegisterCode(text: string) {
@@ -343,44 +584,46 @@ function parseTelegramRegisterCode(text: string) {
   return null
 }
 
+function parseTelegramNotifyInterval(text: string) {
+  const raw = String(text ?? '').trim()
+  const match = raw.match(/^\/notificar(?:@\w+)?(?:\s+(\d+))?(?:\s*(?:min|minuto|minutos))?$/i)
+  if (!match) return null
+
+  const minutesText = String(match[1] ?? '').trim()
+  return { minutes: minutesText ? Number(minutesText) : undefined }
+}
+
 async function handleTelegramRegisterCommand(chatId: string, providedCode: string) {
   const expectedCode = getTelegramLinkCode()
   const normalizedProvided = normalizeLinkCode(providedCode)
 
   if (!normalizedProvided) {
-    await sendTelegramMessage(`Use: /registrar ${expectedCode}`, { ...notificationSettings, chatId, enabled: true })
+    await sendTelegramMessage(`Use: /registrar ${expectedCode}`, chatId)
     return
   }
 
   if (normalizedProvided !== expectedCode) {
-    await sendTelegramMessage(`Código inválido. Use: /registrar ${expectedCode}`, {
-      ...notificationSettings,
-      chatId,
-      enabled: true,
-    })
+    await sendTelegramMessage(`Código inválido. Use: /registrar ${expectedCode}`, chatId)
     return
   }
 
-  const nextSettings = normalizeNotificationSettings({
-    ...notificationSettings,
-    phoneNumber: '',
+  const nextSettings = withLinkedChatId(
+    normalizeNotificationSettings({
+      ...notificationSettings,
+      phoneNumber: '',
+    }),
     chatId,
-    enabled: true,
-  })
+  )
   notificationSettings = nextSettings
   writeSettings({ notifications: notificationSettings })
   publishNotificationSettings()
   publishNotificationRuntimeState()
 
-  await sendTelegramMessage(`✅ EVA Cortex\nVinculação concluída.\n\nCódigo: ${expectedCode}`, {
-    ...notificationSettings,
-    chatId,
-    enabled: true,
-  })
+  await sendTelegramMessage(`✅ EVA Cortex\nVinculação concluída.\n\nCódigo: ${expectedCode}`, chatId)
 
   if (hasActiveCollection && lastCollectionAt) {
     lastHeartbeatNotificationAt = lastCollectionAt
-    notifyCollectionResumedForNewRecipient(lastCollectionAt)
+    notifyCollectionResumedForNewRecipient(lastCollectionAt, chatId)
   }
 }
 
@@ -406,22 +649,53 @@ async function pollTelegramUpdates() {
     const chatId = update.message?.chat?.id
     const rawText = String(update.message?.text ?? '').trim()
     const text = rawText.toLowerCase()
+    const chatIdText = chatId === undefined || chatId === null ? '' : String(chatId)
+    const linkedChatIds = getLinkedChatIds(notificationSettings)
 
     const register = parseTelegramRegisterCode(rawText)
     if (register && chatId !== undefined && chatId !== null) {
-      await handleTelegramRegisterCommand(String(chatId), register.code).catch(() => {})
+      await handleTelegramRegisterCommand(chatIdText, register.code).catch(() => {})
+      continue
+    }
+
+    if ((text === '/menu' || text.startsWith('/menu@')) && chatId !== undefined && chatId !== null) {
+      await handleTelegramMenuCommand(chatIdText).catch(() => {})
+      continue
+    }
+
+    const notifyCommand = parseTelegramNotifyInterval(rawText)
+    if (notifyCommand && chatId !== undefined && chatId !== null) {
+      if (!linkedChatIds.includes(chatIdText)) {
+        await sendTelegramMessage('Nao vinculado. Envie /registrar EVA para conectar sua EVA ao Telegram.', chatIdText).catch(() => {})
+        continue
+      }
+
+      await handleTelegramNotifyCommand(chatIdText, notifyCommand.minutes).catch(() => {})
       continue
     }
 
     if (text.startsWith('/datavoc')) {
-      const linkedChatId = String(notificationSettings.chatId ?? '').trim()
-      if (linkedChatId && chatId !== undefined && chatId !== null && String(chatId) === linkedChatId) {
-        await handleTelegramDatavocCommand(String(chatId)).catch(() => {})
+      if (chatId !== undefined && chatId !== null && linkedChatIds.includes(chatIdText)) {
+        await handleTelegramDatavocCommand(chatIdText).catch(() => {})
       }
+      continue
+    }
+
+    if (text.startsWith('/backup')) {
+      if (chatId !== undefined && chatId !== null && linkedChatIds.includes(chatIdText)) {
+        await handleTelegramBackupCommand(chatIdText).catch(() => {})
+      }
+      continue
+    }
+
+    if (text.startsWith('/print')) {
+      if (chatId !== undefined && chatId !== null && linkedChatIds.includes(chatIdText)) {
+        await handleTelegramPrintCommand(chatIdText).catch(() => {})
+      }
+      continue
     }
 
     if (!notificationSettings.phoneNumber) continue
-    if (notificationSettings.chatId) continue
     if (!contactPhone || chatId === undefined || chatId === null) continue
 
     const savedPhone = normalizePhoneNumber(notificationSettings.phoneNumber)
@@ -429,11 +703,7 @@ async function pollTelegramUpdates() {
     if (!savedPhone || !incomingPhone) continue
     if (savedPhone !== incomingPhone && !incomingPhone.endsWith(savedPhone.replace(/^\+/, ''))) continue
 
-    const nextSettings = normalizeNotificationSettings({
-      ...notificationSettings,
-      chatId: String(chatId),
-      enabled: true,
-    })
+    const nextSettings = withLinkedChatId(notificationSettings, chatIdText)
     notificationSettings = nextSettings
     writeSettings({ notifications: notificationSettings })
     publishNotificationSettings()
@@ -441,7 +711,7 @@ async function pollTelegramUpdates() {
 
     if (hasActiveCollection && lastCollectionAt) {
       lastHeartbeatNotificationAt = lastCollectionAt
-      notifyCollectionResumedForNewRecipient(lastCollectionAt)
+      notifyCollectionResumedForNewRecipient(lastCollectionAt, chatIdText)
     }
     break
   }
@@ -458,15 +728,16 @@ async function sendTrackedNotification(
       throw new Error('Token do Telegram nao configurado.')
     }
 
-    if (!settingsOverride.chatId) {
-      throw new Error('Nao vinculado. Abra o bot no Telegram, clique em Start e compartilhe seu contato (telefone) com o bot.')
+    const chatIds = getLinkedChatIds(settingsOverride)
+    if (chatIds.length === 0) {
+      throw new Error('Nao vinculado. Abra o bot no Telegram e envie /registrar EVA.')
     }
 
     if (kind !== 'teste' && !settingsOverride.enabled) {
       throw new Error('Notificacoes desativadas.')
     }
 
-    await sendTelegramMessage(text, settingsOverride)
+    await Promise.all(chatIds.map((chatId) => sendTelegramMessage(text, chatId)))
     publishNotificationRuntimeState({
       lastSentAt: Date.now(),
       lastSentKind: kind,
@@ -509,12 +780,14 @@ function notifyCollectionStopped(ts: number, backupResult: { ok: true; filePath:
   ).catch(() => {})
 }
 
-function notifyCollectionResumedForNewRecipient(ts: number) {
+function notifyCollectionResumedForNewRecipient(ts: number, chatId?: string) {
   const { datePart, timePart } = formatDateTimePtBr(ts)
-  sendTrackedNotification(
-    'reativacao',
-    `🟢 EVA Cortex\nA coleta já está em andamento.\n\nÚltima coleta registrada:\n${datePart} às ${timePart}.`,
-  ).catch(() => {})
+  const text = `🟢 EVA Cortex\nA coleta já está em andamento.\n\nÚltima coleta registrada:\n${datePart} às ${timePart}.`
+  if (chatId) {
+    sendTelegramMessage(text, chatId).catch(() => {})
+    return
+  }
+  sendTrackedNotification('reativacao', text).catch(() => {})
 }
 
 function resolvePreloadPath() {
@@ -530,7 +803,7 @@ function resolveAppIconPath() {
 }
 
 function computeNextNotificationAt() {
-  if (!notificationSettings.enabled || !notificationSettings.chatId) return undefined
+  if (!notificationSettings.enabled || getLinkedChatIds(notificationSettings).length === 0) return undefined
   if (!hasActiveCollection || !lastCollectionAt) return undefined
 
   const timeoutMs = notificationSettings.staleTimeoutSeconds * 1000
@@ -671,14 +944,15 @@ function registerIpc() {
       const phoneChanged = normalizePhoneNumber(previousSettings.phoneNumber) !== normalizePhoneNumber(normalizedNext.phoneNumber)
       notificationSettings = normalizeNotificationSettings({
         ...normalizedNext,
-        chatId: phoneChanged ? undefined : normalizedNext.chatId,
-        enabled: phoneChanged ? false : normalizedNext.enabled,
+        chatId: phoneChanged ? previousSettings.chatId : normalizedNext.chatId,
+        chatIds: phoneChanged ? previousSettings.chatIds : normalizedNext.chatIds,
+        enabled: phoneChanged ? previousSettings.enabled : normalizedNext.enabled,
       })
       writeSettings({ notifications: notificationSettings })
       publishNotificationSettings()
       publishNotificationRuntimeState()
 
-      const recipientChanged = previousSettings.chatId !== notificationSettings.chatId
+      const recipientChanged = getLinkedChatIds(previousSettings).join('|') !== getLinkedChatIds(notificationSettings).join('|')
       const justEnabled = !previousSettings.enabled && notificationSettings.enabled
       if ((recipientChanged || justEnabled) && hasActiveCollection && lastCollectionAt) {
         lastHeartbeatNotificationAt = lastCollectionAt
@@ -804,10 +1078,10 @@ app.whenReady().then(async () => {
   await tryAutoConnect()
 
   const hasPhone = Boolean(notificationSettings.phoneNumber && notificationSettings.phoneNumber.trim())
-  if (!hasPhone && !notificationSettings.chatId) {
+  if (!hasPhone && getLinkedChatIds(notificationSettings).length === 0) {
     const defaultChatId = getTelegramDefaultChatId()
     if (defaultChatId) {
-      notificationSettings = normalizeNotificationSettings({ ...notificationSettings, chatId: defaultChatId })
+      notificationSettings = withLinkedChatId(notificationSettings, defaultChatId)
       writeSettings({ notifications: notificationSettings })
       publishNotificationSettings()
     }
