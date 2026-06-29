@@ -90,9 +90,14 @@ export function NotificationPanel() {
     const unsubscribe = api.onNotificationRuntimeState((state) => {
       setRuntimeState(state)
     })
+    const unsubscribeSettings = api.onNotificationSettings((nextSettings) => {
+      setSettings(nextSettings)
+      setFeedback(nextSettings.chatId ? 'Telegram vinculado com sucesso.' : '')
+    })
 
     return () => {
       unsubscribe()
+      unsubscribeSettings()
     }
   }, [api])
 
@@ -204,6 +209,9 @@ export function NotificationPanel() {
         <div>O app envia notificacoes no Telegram quando a coleta iniciar, continuar ativa e quando ficar sem dados.</div>
         <div className="mt-1">Para vincular, no Telegram envie: /registrar EVA</div>
         <div className="mt-1">Opcional: voce tambem pode vincular compartilhando seu contato (telefone) com o bot.</div>
+        <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+          Aviso: se o dashboard estiver fechado ou sem conexao com a internet, o bot nao consegue emitir notificacoes.
+        </div>
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">

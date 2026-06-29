@@ -369,6 +369,7 @@ async function handleTelegramRegisterCommand(chatId: string, providedCode: strin
   })
   notificationSettings = nextSettings
   writeSettings({ notifications: notificationSettings })
+  publishNotificationSettings()
   publishNotificationRuntimeState()
 
   await sendTelegramMessage(`✅ EVA Cortex\nVinculação concluída.\n\nCódigo: ${expectedCode}`, {
@@ -435,6 +436,7 @@ async function pollTelegramUpdates() {
     })
     notificationSettings = nextSettings
     writeSettings({ notifications: notificationSettings })
+    publishNotificationSettings()
     publishNotificationRuntimeState()
 
     if (hasActiveCollection && lastCollectionAt) {
@@ -545,6 +547,10 @@ function publishNotificationRuntimeState(partial?: Partial<NotificationRuntimeSt
     nextNotificationAt: computeNextNotificationAt(),
   }
   broadcast('notifications:runtimeState', notificationRuntimeState)
+}
+
+function publishNotificationSettings() {
+  broadcast('notifications:settings', notificationSettings)
 }
 
 function broadcast(channel: string, payload: unknown) {
@@ -669,6 +675,7 @@ function registerIpc() {
         enabled: phoneChanged ? false : normalizedNext.enabled,
       })
       writeSettings({ notifications: notificationSettings })
+      publishNotificationSettings()
       publishNotificationRuntimeState()
 
       const recipientChanged = previousSettings.chatId !== notificationSettings.chatId
@@ -802,9 +809,11 @@ app.whenReady().then(async () => {
     if (defaultChatId) {
       notificationSettings = normalizeNotificationSettings({ ...notificationSettings, chatId: defaultChatId })
       writeSettings({ notifications: notificationSettings })
+      publishNotificationSettings()
     }
   }
 
+  publishNotificationSettings()
   publishNotificationRuntimeState()
 
   setInterval(() => {

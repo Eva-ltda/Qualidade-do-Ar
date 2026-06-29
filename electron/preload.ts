@@ -82,6 +82,11 @@ const api = {
     ipcRenderer.on('notifications:runtimeState', listener)
     return () => ipcRenderer.removeListener('notifications:runtimeState', listener)
   },
+  onNotificationSettings(handler: (settings: NotificationSettings) => void): Unsubscribe {
+    const listener = (_e: unknown, payload: NotificationSettings) => handler(payload)
+    ipcRenderer.on('notifications:settings', listener)
+    return () => ipcRenderer.removeListener('notifications:settings', listener)
+  },
 }
 
 contextBridge.exposeInMainWorld('eva', api)

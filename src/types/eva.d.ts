@@ -83,6 +83,7 @@ declare global {
       onRawLine(handler: (line: SerialRawLine) => void): Unsubscribe
       onStatus(handler: (status: ConnectionStatus) => void): Unsubscribe
       onNotificationRuntimeState(handler: (state: NotificationRuntimeState) => void): Unsubscribe
+      onNotificationSettings(handler: (settings: NotificationSettings) => void): Unsubscribe
     }
   }
 }
