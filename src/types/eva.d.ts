@@ -6,6 +6,7 @@ declare global {
     phoneNumber: string
     chatId?: string
     chatIds?: string[]
+    chatIntervals?: Record<string, number>
     heartbeatIntervalMinutes: number
     staleTimeoutSeconds: number
   }

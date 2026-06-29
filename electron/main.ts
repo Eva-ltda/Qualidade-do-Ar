@@ -10,7 +10,7 @@ const serial = new SerialManager()
 let notificationSettings = normalizeNotificationSettings(readSettings().notifications ?? defaultNotificationSettings)
 let hasActiveCollection = false
 let lastCollectionAt: number | undefined
-let lastHeartbeatNotificationAt = 0
+let lastHeartbeatNotificationAtByChat: Record<string, number> = {}
 let lastStopNotificationFor = 0
 let collectionFrames: SensorFrame[] = []
 let lastSensorFrame: SensorFrame | undefined
@@ -25,8 +25,6 @@ type NotificationRuntimeState = {
   nextNotificationAt?: number
   collectionState: 'aguardando' | 'coletando' | 'parada'
 }
-
-const ALLOWED_NOTIFY_INTERVALS = [5, 15, 30, 60] as const
 
 let notificationRuntimeState: NotificationRuntimeState = {
   collectionState: 'aguardando',
@@ -384,6 +382,32 @@ function withLinkedChatId(settings: typeof notificationSettings, chatId: string)
   })
 }
 
+function getChatIntervalMap(settings = notificationSettings) {
+  const fallbackInterval = Math.max(1, Math.min(60, Number(settings.heartbeatIntervalMinutes) || 60))
+  const entries = Object.entries(settings.chatIntervals ?? {}).map(([chatId, minutes]) => [
+    String(chatId ?? '').trim(),
+    Math.max(1, Math.min(60, Number(minutes) || fallbackInterval)),
+  ])
+  return Object.fromEntries(entries.filter(([chatId]) => Boolean(chatId))) as Record<string, number>
+}
+
+function getHeartbeatIntervalForChat(chatId: string, settings = notificationSettings) {
+  const normalizedChatId = String(chatId ?? '').trim()
+  const chatIntervals = getChatIntervalMap(settings)
+  return Math.max(1, Math.min(60, Number(chatIntervals[normalizedChatId]) || Number(settings.heartbeatIntervalMinutes) || 60))
+}
+
+function syncHeartbeatRecipients(baseTs?: number) {
+  const linkedChatIds = getLinkedChatIds(notificationSettings)
+  const nextMap: Record<string, number> = {}
+
+  for (const chatId of linkedChatIds) {
+    nextMap[chatId] = lastHeartbeatNotificationAtByChat[chatId] ?? baseTs ?? 0
+  }
+
+  lastHeartbeatNotificationAtByChat = nextMap
+}
+
 function canSendNotificationWithSettings(settings = notificationSettings) {
   return settings.enabled && getLinkedChatIds(settings).length > 0 && Boolean(getTelegramBotToken())
 }
@@ -488,30 +512,36 @@ async function handleTelegramMenuCommand(chatId: string) {
 async function handleTelegramNotifyCommand(chatId: string, intervalMinutes?: number) {
   if (!intervalMinutes) {
     await sendTelegramMessage(
-      `🔔 Intervalos disponíveis para notificações:\n${ALLOWED_NOTIFY_INTERVALS.map((value) => `• ${value} min`).join('\n')}\n\nUse: /notificar 15 min`,
+      '🔔 Defina seu intervalo individual de notificações.\nUse qualquer valor entre 1 e 60 minutos.\n\nExemplos:\n• /notificar 5 min\n• /notificar 15 min\n• /notificar 30 min\n• /notificar 60 min',
       chatId,
     )
     return
   }
 
-  if (!ALLOWED_NOTIFY_INTERVALS.includes(intervalMinutes as (typeof ALLOWED_NOTIFY_INTERVALS)[number])) {
+  if (!Number.isFinite(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 60) {
     await sendTelegramMessage(
-      `Intervalo inválido. Use apenas: ${ALLOWED_NOTIFY_INTERVALS.map((value) => `${value} min`).join(', ')}.`,
+      'Intervalo inválido. Use um valor entre 1 e 60 minutos.',
       chatId,
     )
     return
+  }
+
+  const chatIntervals = {
+    ...getChatIntervalMap(notificationSettings),
+    [chatId]: Math.round(intervalMinutes),
   }
 
   notificationSettings = normalizeNotificationSettings({
     ...notificationSettings,
-    heartbeatIntervalMinutes: intervalMinutes,
+    chatIntervals,
     enabled: getLinkedChatIds(notificationSettings).length > 0,
   })
+  lastHeartbeatNotificationAtByChat[chatId] = lastCollectionAt ?? Date.now()
   writeSettings({ notifications: notificationSettings })
   publishNotificationSettings()
   publishNotificationRuntimeState()
 
-  await sendTelegramMessage(`🔔 Intervalo atualizado com sucesso.\nPróxima atualização a cada ${intervalMinutes} minutos.`, chatId)
+  await sendTelegramMessage(`🔔 Intervalo atualizado com sucesso.\nSuas notificações periódicas serão enviadas a cada ${Math.round(intervalMinutes)} minutos.`, chatId)
 }
 
 async function handleTelegramBackupCommand(chatId: string) {
@@ -622,7 +652,6 @@ async function handleTelegramRegisterCommand(chatId: string, providedCode: strin
   await sendTelegramMessage(`✅ EVA Cortex\nVinculação concluída.\n\nCódigo: ${expectedCode}`, chatId)
 
   if (hasActiveCollection && lastCollectionAt) {
-    lastHeartbeatNotificationAt = lastCollectionAt
     notifyCollectionResumedForNewRecipient(lastCollectionAt, chatId)
   }
 }
@@ -705,12 +734,12 @@ async function pollTelegramUpdates() {
 
     const nextSettings = withLinkedChatId(notificationSettings, chatIdText)
     notificationSettings = nextSettings
+    lastHeartbeatNotificationAtByChat[chatIdText] = lastCollectionAt ?? Date.now()
     writeSettings({ notifications: notificationSettings })
     publishNotificationSettings()
     publishNotificationRuntimeState()
 
     if (hasActiveCollection && lastCollectionAt) {
-      lastHeartbeatNotificationAt = lastCollectionAt
       notifyCollectionResumedForNewRecipient(lastCollectionAt, chatIdText)
     }
     break
@@ -761,12 +790,23 @@ function notifyCollectionStarted(ts: number) {
   ).catch(() => {})
 }
 
-function notifyCollectionHeartbeat(ts: number) {
-  const intervalMinutes = notificationSettings.heartbeatIntervalMinutes
-  sendTrackedNotification(
-    'intervalo',
-    `📊 Atualização periódica\nColeta em andamento.\n\nPróxima atualização em ${intervalMinutes} minutos.`,
-  ).catch(() => {})
+function notifyCollectionHeartbeat(ts: number, chatId: string) {
+  const intervalMinutes = getHeartbeatIntervalForChat(chatId)
+  sendTelegramMessage(`📊 Atualização periódica\nColeta em andamento.\n\nPróxima atualização em ${intervalMinutes} minutos.`, chatId)
+    .then(() => {
+      publishNotificationRuntimeState({
+        lastSentAt: Date.now(),
+        lastSentKind: 'intervalo',
+        lastErrorAt: undefined,
+        lastErrorMessage: undefined,
+      })
+    })
+    .catch((error) => {
+      publishNotificationRuntimeState({
+        lastErrorAt: Date.now(),
+        lastErrorMessage: error instanceof Error ? error.message : 'Falha ao enviar notificacao.',
+      })
+    })
 }
 
 function notifyCollectionStopped(ts: number, backupResult: { ok: true; filePath: string } | { ok: false; error: string }) {
@@ -784,6 +824,7 @@ function notifyCollectionResumedForNewRecipient(ts: number, chatId?: string) {
   const { datePart, timePart } = formatDateTimePtBr(ts)
   const text = `🟢 EVA Cortex\nA coleta já está em andamento.\n\nÚltima coleta registrada:\n${datePart} às ${timePart}.`
   if (chatId) {
+    lastHeartbeatNotificationAtByChat[chatId] = ts
     sendTelegramMessage(text, chatId).catch(() => {})
     return
   }
@@ -809,8 +850,16 @@ function computeNextNotificationAt() {
   const timeoutMs = notificationSettings.staleTimeoutSeconds * 1000
   if (Date.now() - lastCollectionAt >= timeoutMs) return undefined
 
-  const intervalMs = notificationSettings.heartbeatIntervalMinutes * 60 * 1000
-  return lastHeartbeatNotificationAt > 0 ? lastHeartbeatNotificationAt + intervalMs : undefined
+  const nextValues = getLinkedChatIds(notificationSettings)
+    .map((chatId) => {
+      const lastSentAt = lastHeartbeatNotificationAtByChat[chatId]
+      if (!lastSentAt || lastSentAt <= 0) return undefined
+      return lastSentAt + getHeartbeatIntervalForChat(chatId) * 60 * 1000
+    })
+    .filter((value): value is number => Boolean(value))
+
+  if (nextValues.length === 0) return undefined
+  return Math.min(...nextValues)
 }
 
 function publishNotificationRuntimeState(partial?: Partial<NotificationRuntimeState>) {
@@ -946,8 +995,10 @@ function registerIpc() {
         ...normalizedNext,
         chatId: phoneChanged ? previousSettings.chatId : normalizedNext.chatId,
         chatIds: phoneChanged ? previousSettings.chatIds : normalizedNext.chatIds,
+        chatIntervals: previousSettings.chatIntervals,
         enabled: phoneChanged ? previousSettings.enabled : normalizedNext.enabled,
       })
+      syncHeartbeatRecipients(lastCollectionAt ?? Date.now())
       writeSettings({ notifications: notificationSettings })
       publishNotificationSettings()
       publishNotificationRuntimeState()
@@ -955,7 +1006,6 @@ function registerIpc() {
       const recipientChanged = getLinkedChatIds(previousSettings).join('|') !== getLinkedChatIds(notificationSettings).join('|')
       const justEnabled = !previousSettings.enabled && notificationSettings.enabled
       if ((recipientChanged || justEnabled) && hasActiveCollection && lastCollectionAt) {
-        lastHeartbeatNotificationAt = lastCollectionAt
         notifyCollectionResumedForNewRecipient(lastCollectionAt)
       }
 
@@ -1047,20 +1097,22 @@ serial.on('frame', (frame: SensorFrame) => {
   if (!hasActiveCollection) {
     collectionFrames = [frame]
     hasActiveCollection = true
-    lastHeartbeatNotificationAt = frame.receivedAt
+    syncHeartbeatRecipients(frame.receivedAt)
     lastStopNotificationFor = 0
     publishNotificationRuntimeState({ collectionState: 'coletando' })
     notifyCollectionStarted(frame.receivedAt)
   } else {
     collectionFrames.push(frame)
-    const heartbeatIntervalMs = notificationSettings.heartbeatIntervalMinutes * 60 * 1000
-    if (frame.receivedAt - lastHeartbeatNotificationAt >= heartbeatIntervalMs) {
-      lastHeartbeatNotificationAt = frame.receivedAt
-      publishNotificationRuntimeState({ collectionState: 'coletando' })
-      notifyCollectionHeartbeat(frame.receivedAt)
-    } else {
-      publishNotificationRuntimeState({ collectionState: 'coletando' })
+    syncHeartbeatRecipients(lastCollectionAt)
+    for (const chatId of getLinkedChatIds(notificationSettings)) {
+      const lastSentAt = lastHeartbeatNotificationAtByChat[chatId] ?? frame.receivedAt
+      const heartbeatIntervalMs = getHeartbeatIntervalForChat(chatId) * 60 * 1000
+      if (frame.receivedAt - lastSentAt >= heartbeatIntervalMs) {
+        lastHeartbeatNotificationAtByChat[chatId] = frame.receivedAt
+        notifyCollectionHeartbeat(frame.receivedAt, chatId)
+      }
     }
+    publishNotificationRuntimeState({ collectionState: 'coletando' })
   }
 
   broadcast('serial:frame', frame)
@@ -1103,7 +1155,7 @@ app.whenReady().then(async () => {
 
     lastStopNotificationFor = lastCollectionAt
     hasActiveCollection = false
-    lastHeartbeatNotificationAt = 0
+    lastHeartbeatNotificationAtByChat = {}
     publishNotificationRuntimeState({ collectionState: 'parada' })
     const backupResult = (() => {
       try {
