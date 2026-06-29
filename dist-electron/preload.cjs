@@ -53,6 +53,11 @@ var api = {
     const listener = (_e, payload) => handler(payload);
     import_electron.ipcRenderer.on("notifications:runtimeState", listener);
     return () => import_electron.ipcRenderer.removeListener("notifications:runtimeState", listener);
+  },
+  onNotificationSettings(handler) {
+    const listener = (_e, payload) => handler(payload);
+    import_electron.ipcRenderer.on("notifications:settings", listener);
+    return () => import_electron.ipcRenderer.removeListener("notifications:settings", listener);
   }
 };
 import_electron.contextBridge.exposeInMainWorld("eva", api);
