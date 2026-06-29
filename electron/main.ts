@@ -192,8 +192,10 @@ function normalizePhoneNumber(value: string) {
 
 function getTelegramSecret() {
   try {
+    const userDataSecretPath = path.join(app.getPath('userData'), 'telegram.secret.json')
     const candidatePaths = Array.from(
       new Set([
+        userDataSecretPath,
         path.join(process.resourcesPath, 'telegram.secret.json'),
         path.join(app.getAppPath(), 'telegram.secret.json'),
         path.join(path.dirname(app.getPath('exe')), 'resources', 'telegram.secret.json'),
@@ -216,6 +218,19 @@ function getTelegramSecret() {
   } catch {
     return { token: '', chatId: '' }
   }
+}
+
+function ensureTelegramSecretInUserData() {
+  try {
+    const userDataSecretPath = path.join(app.getPath('userData'), 'telegram.secret.json')
+    if (fs.existsSync(userDataSecretPath)) return
+
+    const resourcesSecretPath = path.join(process.resourcesPath, 'telegram.secret.json')
+    if (!fs.existsSync(resourcesSecretPath)) return
+
+    fs.mkdirSync(path.dirname(userDataSecretPath), { recursive: true })
+    fs.copyFileSync(resourcesSecretPath, userDataSecretPath)
+  } catch {}
 }
 
 function normalizeLinkCode(value: string) {
@@ -775,6 +790,7 @@ serial.on('rawLine', (line: SerialRawLine) => {
 })
 
 app.whenReady().then(async () => {
+  ensureTelegramSecretInUserData()
   registerIpc()
   createWindow()
   configureAutoUpdater()

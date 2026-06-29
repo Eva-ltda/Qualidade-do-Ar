@@ -29,6 +29,19 @@ jobs:
             npm install --ignore-scripts --no-audit --no-fund --loglevel verbose
           }
 
+      - name: Prepare Telegram secret (CI)
+        shell: pwsh
+        run: |
+          $token = "${{ secrets.EVA_TELEGRAM_BOT_TOKEN }}"
+          if (-not $token) { throw "Secret EVA_TELEGRAM_BOT_TOKEN nao configurado no GitHub." }
+          $obj = [ordered]@{
+            token = $token
+            chatId = ""
+            linkCode = "EVA"
+          }
+          $json = $obj | ConvertTo-Json -Depth 5
+          Set-Content -Path "telegram.secret.json" -Value $json -Encoding UTF8
+
       - name: Build (renderer)
         run: npm run build:renderer
 
