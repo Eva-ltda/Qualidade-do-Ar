@@ -31,3 +31,4 @@ telegram.secret.json
 *.njsproj
 *.sln
 *.sw?
+trae-debug-log-*.ndjson

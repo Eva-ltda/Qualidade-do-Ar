@@ -68,10 +68,12 @@
       "dist/**",
       "dist-electron/**",
       "electron/**",
-      "telegram.secret.json",
       "Logo.png",
       "build/icon.ico",
       "package.json"
+    ],
+    "extraResources": [
+      "telegram.secret.json"
     ],
     "win": {
       "icon": "build/icon.ico",

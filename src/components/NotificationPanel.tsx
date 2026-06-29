@@ -54,7 +54,6 @@ export function NotificationPanel() {
   }
 
   const getNextNotificationLabel = () => {
-    if (!settings.phoneNumber.trim()) return 'Salve um numero para ativar'
     if (!settings.chatId) return 'Aguardando vinculacao no Telegram'
     if (runtimeState.nextNotificationAt) return formatDateTime(runtimeState.nextNotificationAt)
     if (runtimeState.collectionState === 'coletando') return 'Aguardando proximo intervalo'
@@ -105,7 +104,7 @@ export function NotificationPanel() {
     try {
       const saved = await api.saveNotificationSettings({
         ...settings,
-        enabled: Boolean(settings.phoneNumber.trim()) && Boolean(settings.chatId),
+        enabled: Boolean(settings.chatId),
         heartbeatIntervalMinutes: Math.max(1, Number(settings.heartbeatIntervalMinutes) || 60),
         staleTimeoutSeconds: Math.max(5, Number(settings.staleTimeoutSeconds) || 60),
       })
@@ -203,8 +202,8 @@ export function NotificationPanel() {
 
       <div className="mt-4 rounded-xl bg-slate-50 p-3 text-[11px] text-slate-600 ring-1 ring-slate-200">
         <div>O app envia notificacoes no Telegram quando a coleta iniciar, continuar ativa e quando ficar sem dados.</div>
-        <div className="mt-1">Para vincular, abra o bot no Telegram, clique em Start e compartilhe seu contato (telefone) com o bot.</div>
-        <div className="mt-1">Depois que vincular, o app passa a notificar automaticamente.</div>
+        <div className="mt-1">Para vincular, no Telegram envie: /registrar EVA</div>
+        <div className="mt-1">Opcional: voce tambem pode vincular compartilhando seu contato (telefone) com o bot.</div>
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -232,7 +231,7 @@ export function NotificationPanel() {
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <div className="text-xs text-slate-500">
-          {loading ? 'Carregando configuracoes...' : feedback || 'Informe o telefone e clique em salvar.'}
+          {loading ? 'Carregando configuracoes...' : feedback || 'Informe os dados e clique em salvar.'}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button

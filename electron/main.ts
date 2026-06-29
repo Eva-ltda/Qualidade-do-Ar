@@ -192,24 +192,58 @@ function normalizePhoneNumber(value: string) {
 
 function getTelegramSecret() {
   try {
-    const secretPath = path.join(app.getAppPath(), 'telegram.secret.json')
-    if (!fs.existsSync(secretPath)) return { token: '', chatId: '' }
-    const raw = fs.readFileSync(secretPath, 'utf8')
-    const parsed = JSON.parse(raw) as { token?: string; chatId?: string | number }
-    return {
-      token: String(parsed?.token ?? '').trim(),
-      chatId: String(parsed?.chatId ?? '').trim(),
+    const candidatePaths = Array.from(
+      new Set([
+        path.join(process.resourcesPath, 'telegram.secret.json'),
+        path.join(app.getAppPath(), 'telegram.secret.json'),
+        path.join(path.dirname(app.getPath('exe')), 'resources', 'telegram.secret.json'),
+      ]),
+    )
+
+    for (const secretPath of candidatePaths) {
+      if (!fs.existsSync(secretPath)) continue
+
+      const raw = fs.readFileSync(secretPath, 'utf8')
+      const parsed = JSON.parse(raw) as { token?: string; chatId?: string | number; linkCode?: string }
+      return {
+        token: String(parsed?.token ?? '').trim(),
+        chatId: String(parsed?.chatId ?? '').trim(),
+        linkCode: String(parsed?.linkCode ?? '').trim(),
+      }
     }
+
+    return { token: '', chatId: '' }
   } catch {
     return { token: '', chatId: '' }
   }
 }
 
-function getTelegramBotToken() {
-  const envToken = String(process.env.EVA_TELEGRAM_BOT_TOKEN ?? '').trim()
-  if (envToken) return envToken
+function normalizeLinkCode(value: string) {
+  return String(value ?? '').trim().toUpperCase()
+}
 
-  return getTelegramSecret().token
+function getTelegramLinkCode() {
+  const envCode = String(process.env.EVA_TELEGRAM_LINK_CODE ?? '').trim()
+  if (envCode) return normalizeLinkCode(envCode)
+
+  const secret = getTelegramSecret()
+  if (secret.linkCode) return normalizeLinkCode(secret.linkCode)
+
+  return 'EVA'
+}
+
+function getTelegramBotToken() {
+  const secretToken = getTelegramSecret().token
+  if (app.isPackaged) {
+    return secretToken
+  }
+
+  const envToken = String(process.env.EVA_TELEGRAM_BOT_TOKEN ?? '').trim()
+  if (envToken) {
+    return envToken
+  }
+
+  return secretToken
 }
 
 function getTelegramDefaultChatId() {
@@ -230,7 +264,7 @@ async function sendTelegramMessage(text: string, settingsOverride = notification
     throw new Error('Nao vinculado. Abra o bot no Telegram, clique em Start e compartilhe seu contato (telefone) com o bot.')
   }
 
-  const url = `https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`
+  const url = `https://api.telegram.org/bot${token}/sendMessage`
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -272,11 +306,73 @@ async function handleTelegramDatavocCommand(chatId: string) {
   })
 }
 
+function parseTelegramRegisterCode(text: string) {
+  const raw = String(text ?? '').trim()
+  if (!raw) return null
+  const lower = raw.toLowerCase()
+
+  if (lower === '/registrar_eva' || lower.startsWith('/registrar_eva@')) {
+    return { code: 'EVA' }
+  }
+
+  if (lower === '/registrar' || lower.startsWith('/registrar@')) {
+    return { code: '' }
+  }
+
+  if (lower.startsWith('/registrar ')) {
+    const parts = raw.split(/\s+/).filter(Boolean)
+    const code = parts[1] ?? ''
+    return { code }
+  }
+
+  return null
+}
+
+async function handleTelegramRegisterCommand(chatId: string, providedCode: string) {
+  const expectedCode = getTelegramLinkCode()
+  const normalizedProvided = normalizeLinkCode(providedCode)
+
+  if (!normalizedProvided) {
+    await sendTelegramMessage(`Use: /registrar ${expectedCode}`, { ...notificationSettings, chatId, enabled: true })
+    return
+  }
+
+  if (normalizedProvided !== expectedCode) {
+    await sendTelegramMessage(`Código inválido. Use: /registrar ${expectedCode}`, {
+      ...notificationSettings,
+      chatId,
+      enabled: true,
+    })
+    return
+  }
+
+  const nextSettings = normalizeNotificationSettings({
+    ...notificationSettings,
+    phoneNumber: '',
+    chatId,
+    enabled: true,
+  })
+  notificationSettings = nextSettings
+  writeSettings({ notifications: notificationSettings })
+  publishNotificationRuntimeState()
+
+  await sendTelegramMessage(`✅ EVA Cortex\nVinculação concluída.\n\nCódigo: ${expectedCode}`, {
+    ...notificationSettings,
+    chatId,
+    enabled: true,
+  })
+
+  if (hasActiveCollection && lastCollectionAt) {
+    lastHeartbeatNotificationAt = lastCollectionAt
+    notifyCollectionResumedForNewRecipient(lastCollectionAt)
+  }
+}
+
 async function pollTelegramUpdates() {
   const token = getTelegramBotToken()
   if (!token) return
 
-  const url = `https://api.telegram.org/bot${encodeURIComponent(token)}/getUpdates?offset=${telegramUpdatesOffset}&timeout=0`
+  const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${telegramUpdatesOffset}&timeout=0`
   const response = await fetch(url).catch(() => null)
   if (!response || !response.ok) return
 
@@ -292,7 +388,14 @@ async function pollTelegramUpdates() {
     telegramUpdatesOffset = Math.max(telegramUpdatesOffset, update.update_id + 1)
     const contactPhone = update.message?.contact?.phone_number
     const chatId = update.message?.chat?.id
-    const text = String(update.message?.text ?? '').trim().toLowerCase()
+    const rawText = String(update.message?.text ?? '').trim()
+    const text = rawText.toLowerCase()
+
+    const register = parseTelegramRegisterCode(rawText)
+    if (register && chatId !== undefined && chatId !== null) {
+      await handleTelegramRegisterCommand(String(chatId), register.code).catch(() => {})
+      continue
+    }
 
     if (text.startsWith('/datavoc')) {
       const linkedChatId = String(notificationSettings.chatId ?? '').trim()
@@ -677,7 +780,8 @@ app.whenReady().then(async () => {
   configureAutoUpdater()
   await tryAutoConnect()
 
-  if (!notificationSettings.chatId) {
+  const hasPhone = Boolean(notificationSettings.phoneNumber && notificationSettings.phoneNumber.trim())
+  if (!hasPhone && !notificationSettings.chatId) {
     const defaultChatId = getTelegramDefaultChatId()
     if (defaultChatId) {
       notificationSettings = normalizeNotificationSettings({ ...notificationSettings, chatId: defaultChatId })

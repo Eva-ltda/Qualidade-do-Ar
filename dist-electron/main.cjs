@@ -324,6 +324,26 @@ var autoUpdateCheckTimer;
 var notificationRuntimeState = {
   collectionState: "aguardando"
 };
+function getTelegramDebugLogPath() {
+  return import_node_path2.default.join(import_electron2.app.getPath("userData"), "trae-debug-log-telegram-401-app.ndjson");
+}
+function appendTelegramDebugLog(event, payload) {
+  try {
+    const line = JSON.stringify({
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      event,
+      ...payload
+    });
+    import_node_fs2.default.appendFileSync(getTelegramDebugLogPath(), `${line}
+`, "utf8");
+  } catch {
+  }
+}
+function maskTokenForDebug(token) {
+  if (!token) return "<empty>";
+  if (token.length <= 10) return `${token.slice(0, 2)}***${token.slice(-2)}`;
+  return `${token.slice(0, 6)}***${token.slice(-4)}`;
+}
 function formatDateTimePtBr(ts) {
   const formatted = new Date(ts).toLocaleString("pt-BR", { hour12: false });
   const [datePart, timePart] = formatted.split(", ");
@@ -461,22 +481,64 @@ function normalizePhoneNumber(value) {
 }
 function getTelegramSecret() {
   try {
-    const secretPath = import_node_path2.default.join(import_electron2.app.getAppPath(), "telegram.secret.json");
-    if (!import_node_fs2.default.existsSync(secretPath)) return { token: "", chatId: "" };
-    const raw = import_node_fs2.default.readFileSync(secretPath, "utf8");
-    const parsed = JSON.parse(raw);
-    return {
-      token: String(parsed?.token ?? "").trim(),
-      chatId: String(parsed?.chatId ?? "").trim()
-    };
+    const candidatePaths = Array.from(
+      /* @__PURE__ */ new Set([
+        import_node_path2.default.join(process.resourcesPath, "telegram.secret.json"),
+        import_node_path2.default.join(import_electron2.app.getAppPath(), "telegram.secret.json"),
+        import_node_path2.default.join(import_node_path2.default.dirname(import_electron2.app.getPath("exe")), "resources", "telegram.secret.json")
+      ])
+    );
+    appendTelegramDebugLog("telegram.secret.candidates", {
+      candidatePaths,
+      processResourcesPath: process.resourcesPath,
+      appPath: import_electron2.app.getAppPath(),
+      exePath: import_electron2.app.getPath("exe")
+    });
+    for (const secretPath of candidatePaths) {
+      if (!import_node_fs2.default.existsSync(secretPath)) continue;
+      const raw = import_node_fs2.default.readFileSync(secretPath, "utf8");
+      const parsed = JSON.parse(raw);
+      appendTelegramDebugLog("telegram.secret.selected", {
+        secretPath,
+        tokenMask: maskTokenForDebug(String(parsed?.token ?? "").trim()),
+        chatIdMask: String(parsed?.chatId ?? "").trim().slice(0, 4)
+      });
+      return {
+        token: String(parsed?.token ?? "").trim(),
+        chatId: String(parsed?.chatId ?? "").trim()
+      };
+    }
+    appendTelegramDebugLog("telegram.secret.missing", {
+      candidatePaths
+    });
+    return { token: "", chatId: "" };
   } catch {
+    appendTelegramDebugLog("telegram.secret.error", {});
     return { token: "", chatId: "" };
   }
 }
 function getTelegramBotToken() {
+  const secretToken = getTelegramSecret().token;
+  if (import_electron2.app.isPackaged) {
+    appendTelegramDebugLog("telegram.token.source", {
+      source: "secret(packaged)",
+      tokenMask: maskTokenForDebug(secretToken)
+    });
+    return secretToken;
+  }
   const envToken = String(process.env.EVA_TELEGRAM_BOT_TOKEN ?? "").trim();
-  if (envToken) return envToken;
-  return getTelegramSecret().token;
+  if (envToken) {
+    appendTelegramDebugLog("telegram.token.source", {
+      source: "env(dev)",
+      tokenMask: maskTokenForDebug(envToken)
+    });
+    return envToken;
+  }
+  appendTelegramDebugLog("telegram.token.source", {
+    source: "secret(dev)",
+    tokenMask: maskTokenForDebug(secretToken)
+  });
+  return secretToken;
 }
 function getTelegramDefaultChatId() {
   return getTelegramSecret().chatId;
@@ -489,7 +551,13 @@ async function sendTelegramMessage(text, settingsOverride = notificationSettings
   if (!settingsOverride.chatId) {
     throw new Error("Nao vinculado. Abra o bot no Telegram, clique em Start e compartilhe seu contato (telefone) com o bot.");
   }
-  const url = `https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`;
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  appendTelegramDebugLog("telegram.send.request", {
+    url,
+    tokenMask: maskTokenForDebug(token),
+    chatId: settingsOverride.chatId,
+    textPreview: text.slice(0, 80)
+  });
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -499,6 +567,11 @@ async function sendTelegramMessage(text, settingsOverride = notificationSettings
     })
   });
   const payload = await response.json().catch(() => null);
+  appendTelegramDebugLog("telegram.send.response", {
+    status: response.status,
+    ok: response.ok,
+    payload
+  });
   if (!response.ok || !payload || payload.ok === false) {
     const description = payload && "description" in payload && payload.description ? payload.description : `Falha HTTP ${response.status}`;
     const code = payload && "error_code" in payload && payload.error_code ? ` (${payload.error_code})` : "";
@@ -516,7 +589,7 @@ async function handleTelegramDatavocCommand(chatId) {
 async function pollTelegramUpdates() {
   const token = getTelegramBotToken();
   if (!token) return;
-  const url = `https://api.telegram.org/bot${encodeURIComponent(token)}/getUpdates?offset=${telegramUpdatesOffset}&timeout=0`;
+  const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${telegramUpdatesOffset}&timeout=0`;
   const response = await fetch(url).catch(() => null);
   if (!response || !response.ok) return;
   const payload = await response.json().catch(() => null);
