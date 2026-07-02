@@ -8,6 +8,7 @@ export type NotificationSettings = {
   chatId?: string
   chatIds?: string[]
   chatIntervals?: Record<string, number>
+  chatBackupIntervals?: Record<string, number>
   heartbeatIntervalMinutes: number
   staleTimeoutSeconds: number
 }
@@ -23,6 +24,7 @@ export const defaultNotificationSettings: NotificationSettings = {
   chatId: undefined,
   chatIds: [],
   chatIntervals: {},
+  chatBackupIntervals: {},
   heartbeatIntervalMinutes: 60,
   staleTimeoutSeconds: 60,
 }
@@ -49,12 +51,25 @@ export function normalizeNotificationSettings(input?: Partial<NotificationSettin
       ])
       .filter(([chatIdKey]) => Boolean(chatIdKey)),
   )
+  const rawChatBackupIntervals =
+    input?.chatBackupIntervals && typeof input.chatBackupIntervals === 'object'
+      ? (input.chatBackupIntervals as Record<string, unknown>)
+      : {}
+  const chatBackupIntervals = Object.fromEntries(
+    Object.entries(rawChatBackupIntervals)
+      .map(([chatIdKey, value]) => [
+        String(chatIdKey ?? '').trim(),
+        Math.max(1, Math.min(3600, Number(value) || 0)),
+      ])
+      .filter(([chatIdKey, value]) => Boolean(chatIdKey) && Number(value) > 0),
+  )
   return {
     enabled: input?.enabled === undefined ? chatIds.length > 0 : Boolean(input.enabled),
     phoneNumber,
     chatId: chatIds[0],
     chatIds,
     chatIntervals,
+    chatBackupIntervals,
     heartbeatIntervalMinutes: Math.max(1, Number(input?.heartbeatIntervalMinutes) || defaultNotificationSettings.heartbeatIntervalMinutes),
     staleTimeoutSeconds: Math.max(5, Number(input?.staleTimeoutSeconds) || defaultNotificationSettings.staleTimeoutSeconds),
   }

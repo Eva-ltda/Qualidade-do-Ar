@@ -26,67 +26,78 @@ export function useSerial(sampleIntervalMs = 2000) {
   const lastSampleAtRef = useRef<number>(0)
   const api = (window as unknown as { eva?: Window['eva'] }).eva
 
-  const buildCsvText = useCallback((rows: SensorFrame[], includeMetadata = false) => {
-    const delimiter = ';'
+  const buildCsvTextAsync = useCallback(
+    async (rows: SensorFrame[], includeMetadata = false) => {
+      const delimiter = ';'
 
-    const escapeCsv = (value: string) => {
-      const needsQuotes = value.includes('"') || value.includes('\n') || value.includes('\r') || value.includes(delimiter)
-      const escaped = value.replaceAll('"', '""')
-      return needsQuotes ? `"${escaped}"` : escaped
-    }
+      const escapeCsv = (value: string) => {
+        const needsQuotes = value.includes('"') || value.includes('\n') || value.includes('\r') || value.includes(delimiter)
+        const escaped = value.replaceAll('"', '""')
+        return needsQuotes ? `"${escaped}"` : escaped
+      }
 
-    const fmt1 = (n: number) => (Number.isFinite(n) ? n.toFixed(1).replace('.', ',') : '')
-    const fmt0 = (n: number) => (Number.isFinite(n) ? Math.round(n).toString() : '')
+      const fmt1 = (n: number) => (Number.isFinite(n) ? n.toFixed(1).replace('.', ',') : '')
+      const fmt0 = (n: number) => (Number.isFinite(n) ? Math.round(n).toString() : '')
 
-    const header = [
-      'timestamp_iso',
-      'tempInterno_c',
-      'humInterno_pct',
-      'pressInterno_hpa',
-      'vocInternoReal_kohm',
-      'vocInterno_kohm',
-      'tempExterno_c',
-      'humExterno_pct',
-      'pressExterno_hpa',
-      'vocExternoReal_kohm',
-      'vocExterno_kohm',
-      'raw',
-    ].join(delimiter)
+      const header = [
+        'timestamp_iso',
+        'tempInterno_c',
+        'humInterno_pct',
+        'pressInterno_hpa',
+        'vocInternoReal_kohm',
+        'vocInterno_kohm',
+        'tempExterno_c',
+        'humExterno_pct',
+        'pressExterno_hpa',
+        'vocExternoReal_kohm',
+        'vocExterno_kohm',
+        'raw',
+      ].join(delimiter)
 
-    const lines = rows.map((r) =>
-      [
-        escapeCsv(new Date(r.receivedAt).toISOString()),
-        fmt1(r.tempInterno),
-        fmt0(r.humInterno),
-        fmt0(r.pressInterno),
-        fmt1(r.vocInternoReal),
-        fmt1(r.vocInterno),
-        fmt1(r.tempExterno),
-        fmt0(r.humExterno),
-        fmt0(r.pressExterno),
-        fmt1(r.vocExternoReal),
-        fmt1(r.vocExterno),
-        escapeCsv(String(r.raw ?? '')),
-      ].join(delimiter),
-    )
+      const firstRow = rows[0]
+      const lastRow = rows[rows.length - 1]
+      const metadata = includeMetadata
+        ? [
+            'sep=;',
+            ['tipo', 'backup_completo'].join(delimiter),
+            ['primeiro_dado_iso', escapeCsv(firstRow ? new Date(firstRow.receivedAt).toISOString() : '')].join(delimiter),
+            ['ultimo_dado_iso', escapeCsv(lastRow ? new Date(lastRow.receivedAt).toISOString() : '')].join(delimiter),
+            ['total_registros', String(rows.length)].join(delimiter),
+            '',
+          ]
+        : ['sep=;']
 
-    if (!includeMetadata) {
-      return ['sep=;', header, ...lines].join('\r\n')
-    }
+      const lines = [...metadata, header]
+      const chunkSize = 1000
 
-    const firstRow = rows[0]
-    const lastRow = rows[rows.length - 1]
-    const metadata = [
-      'sep=;',
-      ['tipo', 'backup_completo'].join(delimiter),
-      ['primeiro_dado_iso', escapeCsv(firstRow ? new Date(firstRow.receivedAt).toISOString() : '')].join(delimiter),
-      ['ultimo_dado_iso', escapeCsv(lastRow ? new Date(lastRow.receivedAt).toISOString() : '')].join(delimiter),
-      ['total_registros', String(rows.length)].join(delimiter),
-      '',
-    ]
+      for (let i = 0; i < rows.length; i += 1) {
+        const r = rows[i]
+        lines.push(
+          [
+            escapeCsv(new Date(r.receivedAt).toISOString()),
+            fmt1(r.tempInterno),
+            fmt0(r.humInterno),
+            fmt0(r.pressInterno),
+            fmt1(r.vocInternoReal),
+            fmt1(r.vocInterno),
+            fmt1(r.tempExterno),
+            fmt0(r.humExterno),
+            fmt0(r.pressExterno),
+            fmt1(r.vocExternoReal),
+            fmt1(r.vocExterno),
+            escapeCsv(String(r.raw ?? '')),
+          ].join(delimiter),
+        )
 
-    return [...metadata, header, ...lines].join('\r\n')
-  }, [])
+        if ((i + 1) % chunkSize === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+      }
+
+      return lines.join('\r\n')
+    },
+    [],
+  )
 
   const refreshPorts = useCallback(async () => {
     if (!api) return
@@ -123,20 +134,20 @@ export function useSerial(sampleIntervalMs = 2000) {
 
   const exportCsv = useCallback(async () => {
     if (!api) return { ok: false, error: 'API indisponível' } as ExportResult
-    const rows = recordsRef.current
+    const rows = recordsRef.current.slice()
     if (rows.length === 0) return { ok: false, error: 'Nenhum dado disponível para exportação' } as ExportResult
-    const csvText = buildCsvText(rows)
+    const csvText = await buildCsvTextAsync(rows)
     return api.exportCsv(csvText)
-  }, [api, buildCsvText])
+  }, [api, buildCsvTextAsync])
 
   const backupCsv = useCallback(async () => {
     if (!api) return { ok: false, error: 'API indisponível' } as ExportResult
-    const rows = recordsRef.current
+    const rows = recordsRef.current.slice()
     if (rows.length === 0) return { ok: false, error: 'Nenhum dado disponível para backup' } as ExportResult
 
-    const csvText = buildCsvText(rows, true)
+    const csvText = await buildCsvTextAsync(rows, true)
     return api.backupCsv(csvText)
-  }, [api, buildCsvText])
+  }, [api, buildCsvTextAsync])
 
   useEffect(() => {
     if (!api) return

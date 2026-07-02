@@ -62,6 +62,9 @@ const api = {
   backupCsv(csvText: string): Promise<ExportResult> {
     return ipcRenderer.invoke('data:backupCsv', csvText)
   },
+  notifyPrintCaptureReady(): void {
+    ipcRenderer.send('dashboard:print-ready')
+  },
   onFrame(handler: (frame: SensorFrame) => void): Unsubscribe {
     const listener = (_e: unknown, payload: SensorFrame) => handler(payload)
     ipcRenderer.on('serial:frame', listener)
@@ -86,6 +89,16 @@ const api = {
     const listener = (_e: unknown, payload: NotificationSettings) => handler(payload)
     ipcRenderer.on('notifications:settings', listener)
     return () => ipcRenderer.removeListener('notifications:settings', listener)
+  },
+  onPrintCaptureRequest(handler: (frame?: SensorFrame) => void): Unsubscribe {
+    const listener = (_e: unknown, payload?: SensorFrame) => handler(payload)
+    ipcRenderer.on('dashboard:prepare-print', listener)
+    return () => ipcRenderer.removeListener('dashboard:prepare-print', listener)
+  },
+  onPrintCaptureFinished(handler: () => void): Unsubscribe {
+    const listener = () => handler()
+    ipcRenderer.on('dashboard:finish-print', listener)
+    return () => ipcRenderer.removeListener('dashboard:finish-print', listener)
   },
 }
 

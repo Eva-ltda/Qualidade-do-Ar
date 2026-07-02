@@ -11,6 +11,7 @@ let notificationSettings = normalizeNotificationSettings(readSettings().notifica
 let hasActiveCollection = false
 let lastCollectionAt: number | undefined
 let lastHeartbeatNotificationAtByChat: Record<string, number> = {}
+let lastBackupNotificationAtByChat: Record<string, number> = {}
 let lastStopNotificationFor = 0
 let collectionFrames: SensorFrame[] = []
 let lastSensorFrame: SensorFrame | undefined
@@ -126,7 +127,11 @@ function buildTelegramMenuMessage() {
     '5 min, 15 min, 30 min, 60 min.',
     '',
     '/backup',
-    'Solicita o último backup disponível da coleta.',
+    'Envia um backup atual da coleta ou agenda backups automáticos.',
+    'Exemplos:',
+    '/backup',
+    '/backup 10 min',
+    '/backup 1 hora',
     '',
     '/print',
     'Envia uma captura da tela atual da EVA.',
@@ -258,6 +263,21 @@ function saveRequestedBackup(rows: SensorFrame[], requestedAt: number) {
   const backupDir = getBackupDirectory()
   const timestamp = new Date(requestedAt).toISOString().replace(/[:.]/g, '-')
   const filePath = path.join(backupDir, `backup_solicitado_${timestamp}.csv`)
+
+  fs.mkdirSync(backupDir, { recursive: true })
+  fs.writeFileSync(filePath, buildBackupCsvText(rows), 'utf8')
+
+  return { ok: true as const, filePath }
+}
+
+function saveScheduledBackup(rows: SensorFrame[], requestedAt: number) {
+  if (rows.length === 0) {
+    return { ok: false as const, error: 'Nenhum dado disponível para backup.' }
+  }
+
+  const backupDir = getBackupDirectory()
+  const timestamp = new Date(requestedAt).toISOString().replace(/[:.]/g, '-')
+  const filePath = path.join(backupDir, `backup_agendado_${timestamp}.csv`)
 
   fs.mkdirSync(backupDir, { recursive: true })
   fs.writeFileSync(filePath, buildBackupCsvText(rows), 'utf8')
@@ -397,6 +417,30 @@ function getHeartbeatIntervalForChat(chatId: string, settings = notificationSett
   return Math.max(1, Math.min(60, Number(chatIntervals[normalizedChatId]) || Number(settings.heartbeatIntervalMinutes) || 60))
 }
 
+function getChatBackupIntervalMap(settings = notificationSettings) {
+  const entries = Object.entries(settings.chatBackupIntervals ?? {}).map(([chatId, minutes]) => [
+    String(chatId ?? '').trim(),
+    Math.max(1, Math.min(3600, Number(minutes) || 0)),
+  ])
+  return Object.fromEntries(entries.filter(([chatId, minutes]) => Boolean(chatId) && Number(minutes) > 0)) as Record<string, number>
+}
+
+function getBackupIntervalForChat(chatId: string, settings = notificationSettings) {
+  const normalizedChatId = String(chatId ?? '').trim()
+  const chatBackupIntervals = getChatBackupIntervalMap(settings)
+  return Math.max(0, Math.min(3600, Number(chatBackupIntervals[normalizedChatId]) || 0))
+}
+
+function formatBackupIntervalLabel(totalMinutes: number) {
+  const normalized = Math.max(1, Math.round(totalMinutes))
+  if (normalized % 60 === 0) {
+    const hours = normalized / 60
+    return `${hours} ${hours === 1 ? 'hora' : 'horas'}`
+  }
+
+  return `${normalized} ${normalized === 1 ? 'minuto' : 'minutos'}`
+}
+
 function syncHeartbeatRecipients(baseTs?: number) {
   const linkedChatIds = getLinkedChatIds(notificationSettings)
   const nextMap: Record<string, number> = {}
@@ -406,6 +450,17 @@ function syncHeartbeatRecipients(baseTs?: number) {
   }
 
   lastHeartbeatNotificationAtByChat = nextMap
+}
+
+function syncBackupRecipients(baseTs?: number) {
+  const linkedChatIds = getLinkedChatIds(notificationSettings)
+  const nextMap: Record<string, number> = {}
+
+  for (const chatId of linkedChatIds) {
+    nextMap[chatId] = lastBackupNotificationAtByChat[chatId] ?? baseTs ?? 0
+  }
+
+  lastBackupNotificationAtByChat = nextMap
 }
 
 function canSendNotificationWithSettings(settings = notificationSettings) {
@@ -544,24 +599,122 @@ async function handleTelegramNotifyCommand(chatId: string, intervalMinutes?: num
   await sendTelegramMessage(`🔔 Intervalo atualizado com sucesso.\nSuas notificações periódicas serão enviadas a cada ${Math.round(intervalMinutes)} minutos.`, chatId)
 }
 
-async function handleTelegramBackupCommand(chatId: string) {
-  let filePath = findLatestBackupFile()
+type ParsedBackupCommand =
+  | { mode: 'send-now' }
+  | { mode: 'disable-auto' }
+  | { mode: 'schedule'; intervalMinutes: number }
 
-  if (!filePath && collectionFrames.length > 0) {
-    const created = saveRequestedBackup(collectionFrames, Date.now())
-    if (created.ok) {
-      filePath = created.filePath
-    }
+function parseTelegramBackupCommand(text: string): ParsedBackupCommand | null {
+  const raw = String(text ?? '').trim()
+  if (!raw) return null
+
+  const match = raw.match(/^\/backup(?:@\w+)?(?:\s+(.+))?$/i)
+  if (!match) return null
+
+  const argument = String(match[1] ?? '').trim()
+  if (!argument) {
+    return { mode: 'send-now' }
   }
 
+  const normalizedArgument = argument.toLowerCase()
+  if (['off', 'desligar', 'desativar', 'parar', '0'].includes(normalizedArgument)) {
+    return { mode: 'disable-auto' }
+  }
+
+  const intervalMatch = normalizedArgument.match(/^(\d+)(?:\s*(min|minuto|minutos|h|hr|hora|horas))?$/i)
+  if (!intervalMatch) return null
+
+  const value = Number(intervalMatch[1] ?? 0)
+  const unit = String(intervalMatch[2] ?? 'min').toLowerCase()
+  if (!Number.isFinite(value) || value <= 0) return null
+
+  const isHourUnit = ['h', 'hr', 'hora', 'horas'].includes(unit)
+  return { mode: 'schedule', intervalMinutes: isHourUnit ? value * 60 : value }
+}
+
+function buildBackupCaption(filePath: string, generatedAt: number, originLabel: string) {
+  const stats = fs.statSync(filePath)
+  const latestFrame = collectionFrames[collectionFrames.length - 1]
+  const latestDataText = latestFrame ? `\nUltimo dado da coleta: ${formatDateTimeInlinePtBr(latestFrame.receivedAt)}` : ''
+  return `💾 Backup da coleta\nOrigem: ${originLabel}\nArquivo: ${path.basename(filePath)}\nGerado em: ${formatDateTimeInlinePtBr(generatedAt)}\nArquivo atualizado em: ${formatDateTimeInlinePtBr(stats.mtimeMs)}${latestDataText}`
+}
+
+function createCurrentBackupFile(requestedAt: number, mode: 'manual' | 'scheduled') {
+  if (collectionFrames.length > 0) {
+    return mode === 'scheduled' ? saveScheduledBackup(collectionFrames, requestedAt) : saveRequestedBackup(collectionFrames, requestedAt)
+  }
+
+  const filePath = findLatestBackupFile()
   if (!filePath) {
-    await sendTelegramMessage('Nenhum backup disponível no momento.', chatId)
+    return { ok: false as const, error: 'Nenhum backup disponível no momento.' }
+  }
+
+  return { ok: true as const, filePath, fromExistingFile: true as const }
+}
+
+async function handleTelegramBackupCommand(chatId: string, command: ParsedBackupCommand = { mode: 'send-now' }) {
+  if (command.mode === 'disable-auto') {
+    const chatBackupIntervals = { ...getChatBackupIntervalMap(notificationSettings) }
+    delete chatBackupIntervals[chatId]
+
+    notificationSettings = normalizeNotificationSettings({
+      ...notificationSettings,
+      chatBackupIntervals,
+      enabled: getLinkedChatIds(notificationSettings).length > 0,
+    })
+    delete lastBackupNotificationAtByChat[chatId]
+    writeSettings({ notifications: notificationSettings })
+    publishNotificationSettings()
+    publishNotificationRuntimeState()
+
+    await sendTelegramMessage('💾 Backup automático desativado para este chat.', chatId)
     return
   }
 
-  const stats = fs.statSync(filePath)
-  const caption = `💾 Backup da coleta\nArquivo: ${path.basename(filePath)}\nData: ${formatDateTimeInlinePtBr(stats.mtimeMs)}`
-  await sendTelegramFile('sendDocument', 'document', filePath, chatId, caption)
+  if (command.mode === 'schedule') {
+    if (!Number.isFinite(command.intervalMinutes) || command.intervalMinutes < 1 || command.intervalMinutes > 3600) {
+      await sendTelegramMessage(
+        'Intervalo inválido. Use de 1 a 60 minutos, ou de 1 a 60 horas.\n\nExemplos:\n• /backup 10 min\n• /backup 1 hora\n• /backup 2 horas',
+        chatId,
+      )
+      return
+    }
+
+    const chatBackupIntervals = {
+      ...getChatBackupIntervalMap(notificationSettings),
+      [chatId]: Math.round(command.intervalMinutes),
+    }
+
+    notificationSettings = normalizeNotificationSettings({
+      ...notificationSettings,
+      chatBackupIntervals,
+      enabled: getLinkedChatIds(notificationSettings).length > 0,
+    })
+    lastBackupNotificationAtByChat[chatId] = lastCollectionAt ?? Date.now()
+    writeSettings({ notifications: notificationSettings })
+    publishNotificationSettings()
+    publishNotificationRuntimeState()
+
+    await sendTelegramMessage(
+      `💾 Backup automático ativado com sucesso.\nEste chat receberá um CSV novo a cada ${formatBackupIntervalLabel(command.intervalMinutes)}.\n\nPara desativar, use:\n• /backup off`,
+      chatId,
+    )
+    return
+  }
+
+  const requestedAt = Date.now()
+  const result = createCurrentBackupFile(requestedAt, 'manual')
+  if (!result.ok) {
+    await sendTelegramMessage(result.error, chatId)
+    return
+  }
+
+  const caption = buildBackupCaption(
+    result.filePath,
+    requestedAt,
+    result.fromExistingFile ? 'arquivo disponível mais recente' : 'coleta atual',
+  )
+  await sendTelegramFile('sendDocument', 'document', result.filePath, chatId, caption)
 }
 
 async function handleTelegramPrintCommand(chatId: string) {
@@ -571,6 +724,8 @@ async function handleTelegramPrintCommand(chatId: string) {
     return
   }
 
+  await prepareWindowForPrintCapture(win, lastSensorFrame)
+
   const image = await win.webContents.capturePage()
   const screenshotDir = path.join(app.getPath('temp'), 'eva-cortex')
   const screenshotPath = path.join(screenshotDir, `print_eva_${Date.now()}.png`)
@@ -578,14 +733,19 @@ async function handleTelegramPrintCommand(chatId: string) {
   fs.writeFileSync(screenshotPath, image.toPNG())
 
   try {
+    const captureAt = Date.now()
+    const latestDataText = lastSensorFrame
+      ? `\nUltimo dado: ${formatDateTimeInlinePtBr(lastSensorFrame.receivedAt)}`
+      : ''
     await sendTelegramFile(
       'sendPhoto',
       'photo',
       screenshotPath,
       chatId,
-      `🖼 Captura atual da EVA\nData: ${formatDateTimeInlinePtBr(Date.now())}`,
+      `🖼 Captura atual da EVA\nData: ${formatDateTimeInlinePtBr(captureAt)}${latestDataText}`,
     )
   } finally {
+    win.webContents.send('dashboard:finish-print')
     try {
       fs.unlinkSync(screenshotPath)
     } catch {}
@@ -703,16 +863,20 @@ async function pollTelegramUpdates() {
       continue
     }
 
-    if (text.startsWith('/datavoc')) {
-      if (chatId !== undefined && chatId !== null && linkedChatIds.includes(chatIdText)) {
-        await handleTelegramDatavocCommand(chatIdText).catch(() => {})
+    const backupCommand = parseTelegramBackupCommand(rawText)
+    if (backupCommand && chatId !== undefined && chatId !== null) {
+      if (!linkedChatIds.includes(chatIdText)) {
+        await sendTelegramMessage('Nao vinculado. Envie /registrar EVA para conectar sua EVA ao Telegram.', chatIdText).catch(() => {})
+        continue
       }
+
+      await handleTelegramBackupCommand(chatIdText, backupCommand).catch(() => {})
       continue
     }
 
-    if (text.startsWith('/backup')) {
+    if (text.startsWith('/datavoc')) {
       if (chatId !== undefined && chatId !== null && linkedChatIds.includes(chatIdText)) {
-        await handleTelegramBackupCommand(chatIdText).catch(() => {})
+        await handleTelegramDatavocCommand(chatIdText).catch(() => {})
       }
       continue
     }
@@ -735,6 +899,7 @@ async function pollTelegramUpdates() {
     const nextSettings = withLinkedChatId(notificationSettings, chatIdText)
     notificationSettings = nextSettings
     lastHeartbeatNotificationAtByChat[chatIdText] = lastCollectionAt ?? Date.now()
+    lastBackupNotificationAtByChat[chatIdText] = lastCollectionAt ?? Date.now()
     writeSettings({ notifications: notificationSettings })
     publishNotificationSettings()
     publishNotificationRuntimeState()
@@ -885,6 +1050,39 @@ function getMainWindow() {
   return BrowserWindow.getAllWindows()[0]
 }
 
+async function prepareWindowForPrintCapture(win: BrowserWindow, frame?: SensorFrame) {
+  if (win.isMinimized()) {
+    win.restore()
+  }
+  if (!win.isVisible()) {
+    win.show()
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false
+
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      ipcMain.removeListener('dashboard:print-ready', onReady)
+      resolve()
+    }
+
+    const onReady = (event: Electron.IpcMainEvent) => {
+      if (event.sender.id !== win.webContents.id) return
+      finish()
+    }
+
+    const timeoutId = setTimeout(finish, 1500)
+    ipcMain.on('dashboard:print-ready', onReady)
+    win.webContents.send('dashboard:prepare-print', frame)
+  })
+
+  win.webContents.invalidate()
+  await new Promise((resolve) => setTimeout(resolve, 120))
+}
+
 function configureAutoUpdater() {
   if (!app.isPackaged || process.platform !== 'win32') return
 
@@ -996,9 +1194,11 @@ function registerIpc() {
         chatId: phoneChanged ? previousSettings.chatId : normalizedNext.chatId,
         chatIds: phoneChanged ? previousSettings.chatIds : normalizedNext.chatIds,
         chatIntervals: previousSettings.chatIntervals,
+        chatBackupIntervals: previousSettings.chatBackupIntervals,
         enabled: phoneChanged ? previousSettings.enabled : normalizedNext.enabled,
       })
       syncHeartbeatRecipients(lastCollectionAt ?? Date.now())
+      syncBackupRecipients(lastCollectionAt ?? Date.now())
       writeSettings({ notifications: notificationSettings })
       publishNotificationSettings()
       publishNotificationRuntimeState()
@@ -1098,12 +1298,14 @@ serial.on('frame', (frame: SensorFrame) => {
     collectionFrames = [frame]
     hasActiveCollection = true
     syncHeartbeatRecipients(frame.receivedAt)
+    syncBackupRecipients(frame.receivedAt)
     lastStopNotificationFor = 0
     publishNotificationRuntimeState({ collectionState: 'coletando' })
     notifyCollectionStarted(frame.receivedAt)
   } else {
     collectionFrames.push(frame)
     syncHeartbeatRecipients(lastCollectionAt)
+    syncBackupRecipients(lastCollectionAt)
     for (const chatId of getLinkedChatIds(notificationSettings)) {
       const lastSentAt = lastHeartbeatNotificationAtByChat[chatId] ?? frame.receivedAt
       const heartbeatIntervalMs = getHeartbeatIntervalForChat(chatId) * 60 * 1000
@@ -1112,6 +1314,49 @@ serial.on('frame', (frame: SensorFrame) => {
         notifyCollectionHeartbeat(frame.receivedAt, chatId)
       }
     }
+
+    const dueBackupChatIds = getLinkedChatIds(notificationSettings).filter((chatId) => {
+      const backupIntervalMinutes = getBackupIntervalForChat(chatId)
+      if (!backupIntervalMinutes) return false
+
+      const lastSentAt = lastBackupNotificationAtByChat[chatId] ?? frame.receivedAt
+      return frame.receivedAt - lastSentAt >= backupIntervalMinutes * 60 * 1000
+    })
+
+    if (dueBackupChatIds.length > 0) {
+      for (const chatId of dueBackupChatIds) {
+        lastBackupNotificationAtByChat[chatId] = frame.receivedAt
+      }
+
+      const requestedAt = Date.now()
+      const backupResult = createCurrentBackupFile(requestedAt, 'scheduled')
+      if (backupResult.ok) {
+        const caption = buildBackupCaption(backupResult.filePath, requestedAt, 'backup automático')
+        for (const chatId of dueBackupChatIds) {
+          sendTelegramFile('sendDocument', 'document', backupResult.filePath, chatId, caption)
+            .then(() => {
+              publishNotificationRuntimeState({
+                lastSentAt: Date.now(),
+                lastSentKind: 'intervalo',
+                lastErrorAt: undefined,
+                lastErrorMessage: undefined,
+              })
+            })
+            .catch((error) => {
+              publishNotificationRuntimeState({
+                lastErrorAt: Date.now(),
+                lastErrorMessage: error instanceof Error ? error.message : 'Falha ao enviar backup automatico.',
+              })
+            })
+        }
+      } else {
+        publishNotificationRuntimeState({
+          lastErrorAt: Date.now(),
+          lastErrorMessage: backupResult.error,
+        })
+      }
+    }
+
     publishNotificationRuntimeState({ collectionState: 'coletando' })
   }
 
@@ -1156,6 +1401,7 @@ app.whenReady().then(async () => {
     lastStopNotificationFor = lastCollectionAt
     hasActiveCollection = false
     lastHeartbeatNotificationAtByChat = {}
+    lastBackupNotificationAtByChat = {}
     publishNotificationRuntimeState({ collectionState: 'parada' })
     const backupResult = (() => {
       try {

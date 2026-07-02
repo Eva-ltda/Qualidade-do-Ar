@@ -34,6 +34,9 @@ var api = {
   backupCsv(csvText) {
     return import_electron.ipcRenderer.invoke("data:backupCsv", csvText);
   },
+  notifyPrintCaptureReady() {
+    import_electron.ipcRenderer.send("dashboard:print-ready");
+  },
   onFrame(handler) {
     const listener = (_e, payload) => handler(payload);
     import_electron.ipcRenderer.on("serial:frame", listener);
@@ -58,6 +61,16 @@ var api = {
     const listener = (_e, payload) => handler(payload);
     import_electron.ipcRenderer.on("notifications:settings", listener);
     return () => import_electron.ipcRenderer.removeListener("notifications:settings", listener);
+  },
+  onPrintCaptureRequest(handler) {
+    const listener = (_e, payload) => handler(payload);
+    import_electron.ipcRenderer.on("dashboard:prepare-print", listener);
+    return () => import_electron.ipcRenderer.removeListener("dashboard:prepare-print", listener);
+  },
+  onPrintCaptureFinished(handler) {
+    const listener = () => handler();
+    import_electron.ipcRenderer.on("dashboard:finish-print", listener);
+    return () => import_electron.ipcRenderer.removeListener("dashboard:finish-print", listener);
   }
 };
 import_electron.contextBridge.exposeInMainWorld("eva", api);

@@ -205,6 +205,7 @@ var defaultNotificationSettings = {
   phoneNumber: "",
   chatId: void 0,
   chatIds: [],
+  chatIntervals: {},
   heartbeatIntervalMinutes: 60,
   staleTimeoutSeconds: 60
 };
@@ -217,11 +218,19 @@ function normalizeNotificationSettings(input) {
       (Array.isArray(input?.chatIds) ? input?.chatIds : []).map((value) => String(value ?? "").trim()).filter(Boolean).concat(chatId ? [chatId] : [])
     )
   );
+  const rawChatIntervals = input?.chatIntervals && typeof input.chatIntervals === "object" ? input.chatIntervals : {};
+  const chatIntervals = Object.fromEntries(
+    Object.entries(rawChatIntervals).map(([chatIdKey, value]) => [
+      String(chatIdKey ?? "").trim(),
+      Math.max(1, Math.min(60, Number(value) || defaultNotificationSettings.heartbeatIntervalMinutes))
+    ]).filter(([chatIdKey]) => Boolean(chatIdKey))
+  );
   return {
     enabled: input?.enabled === void 0 ? chatIds.length > 0 : Boolean(input.enabled),
     phoneNumber,
     chatId: chatIds[0],
     chatIds,
+    chatIntervals,
     heartbeatIntervalMinutes: Math.max(1, Number(input?.heartbeatIntervalMinutes) || defaultNotificationSettings.heartbeatIntervalMinutes),
     staleTimeoutSeconds: Math.max(5, Number(input?.staleTimeoutSeconds) || defaultNotificationSettings.staleTimeoutSeconds)
   };
@@ -323,7 +332,7 @@ var serial = new SerialManager();
 var notificationSettings = normalizeNotificationSettings(readSettings().notifications ?? defaultNotificationSettings);
 var hasActiveCollection = false;
 var lastCollectionAt;
-var lastHeartbeatNotificationAt = 0;
+var lastHeartbeatNotificationAtByChat = {};
 var lastStopNotificationFor = 0;
 var collectionFrames = [];
 var lastSensorFrame;
@@ -381,6 +390,58 @@ function vocToPPM(voc) {
   const previous = vocToPpmTable[vocToPpmTable.length - 2];
   return Math.max(0, Math.round(mapRange(voc, previous.voc, last.voc, previous.ppm, last.ppm)));
 }
+function getAirQualityLabelFromVoc(voc) {
+  const ppm = vocToPPM(voc);
+  if (ppm <= 65) return "Excelente";
+  if (ppm <= 150) return "Boa";
+  if (ppm <= 300) return "Moderada";
+  if (ppm <= 500) return "Ruim";
+  return "Muito Ruim";
+}
+function buildTelegramMenuMessage() {
+  return [
+    "\u{1F916} EVA Cortex - Menu Principal",
+    "",
+    "Bem-vindo ao sistema de notifica\xE7\xF5es da EVA Cortex.",
+    "",
+    "\u{1F4CB} Comandos dispon\xEDveis:",
+    "",
+    "/menu",
+    "Exibe este menu de comandos.",
+    "",
+    "/registrar_eva",
+    "Conecta sua EVA ao Telegram.",
+    "",
+    "/datavoc",
+    "Mostra os \xFAltimos dados coletados:",
+    "\u2022 VOC",
+    "\u2022 Temperatura",
+    "\u2022 Umidade",
+    "\u2022 Qualidade do ar",
+    "",
+    "/notificar",
+    "Configura o intervalo das notifica\xE7\xF5es.",
+    "Exemplo:",
+    "5 min, 15 min, 30 min, 60 min.",
+    "",
+    "/backup",
+    "Solicita o \xFAltimo backup dispon\xEDvel da coleta.",
+    "",
+    "/print",
+    "Envia uma captura da tela atual da EVA.",
+    "",
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501",
+    "",
+    "\u{1F4CA} Status do monitoramento:",
+    "Use /datavoc para consultar os dados atuais.",
+    "",
+    "\u{1F514} Notifica\xE7\xF5es:",
+    "Use /notificar para escolher o intervalo dos avisos.",
+    "",
+    "\u{1F6E0} EVA Cortex",
+    "Monitoramento Inteligente da Qualidade do Ar."
+  ].join("\n");
+}
 function buildTelegramVocDataMessage() {
   if (!lastSensorFrame) {
     return "\u{1F4BE} Dados:\nNenhum dado de coleta foi recebido ainda.";
@@ -389,17 +450,26 @@ function buildTelegramVocDataMessage() {
   const vocExterno = lastSensorFrame.vocExternoCorrigido;
   const ppmInterno = vocToPPM(vocInterno);
   const ppmExterno = vocToPPM(vocExterno);
+  const qualidadeInterna = getAirQualityLabelFromVoc(vocInterno);
+  const qualidadeExterna = getAirQualityLabelFromVoc(vocExterno);
   return [
     "\u{1F4BE} Dados:",
     `Voc interno: ${formatNumberPtBr(vocInterno, 1)}`,
     `ppm interno: ${ppmInterno}`,
+    `Temperatura interna: ${formatNumberPtBr(lastSensorFrame.tempInterno, 1)} \xB0C`,
     `Umidade: ${formatNumberPtBr(lastSensorFrame.humInterno, 0)}`,
+    `Qualidade do ar: ${qualidadeInterna}`,
     "",
     "---------------",
     `Voc externo: ${formatNumberPtBr(vocExterno, 1)}`,
     `ppm externo: ${ppmExterno}`,
-    `Umidade: ${formatNumberPtBr(lastSensorFrame.humExterno, 0)}`
+    `Temperatura externa: ${formatNumberPtBr(lastSensorFrame.tempExterno, 1)} \xB0C`,
+    `Umidade: ${formatNumberPtBr(lastSensorFrame.humExterno, 0)}`,
+    `Qualidade do ar: ${qualidadeExterna}`
   ].join("\n");
+}
+function getBackupDirectory() {
+  return import_node_path2.default.join(import_electron2.app.getPath("documents"), "EVA Cortex", "backups");
 }
 function buildBackupCsvText(rows) {
   const delimiter = ";";
@@ -456,12 +526,33 @@ function saveAutomaticBackup(rows, stoppedAt) {
   if (rows.length === 0) {
     return { ok: false, error: "Nenhum dado dispon\xEDvel para backup." };
   }
-  const backupDir = import_node_path2.default.join(import_electron2.app.getPath("documents"), "EVA Cortex", "backups");
+  const backupDir = getBackupDirectory();
   const timestamp = new Date(stoppedAt).toISOString().replace(/[:.]/g, "-");
   const filePath = import_node_path2.default.join(backupDir, `backup_automatico_${timestamp}.csv`);
   import_node_fs2.default.mkdirSync(backupDir, { recursive: true });
   import_node_fs2.default.writeFileSync(filePath, buildBackupCsvText(rows), "utf8");
   return { ok: true, filePath };
+}
+function saveRequestedBackup(rows, requestedAt) {
+  if (rows.length === 0) {
+    return { ok: false, error: "Nenhum dado dispon\xEDvel para backup." };
+  }
+  const backupDir = getBackupDirectory();
+  const timestamp = new Date(requestedAt).toISOString().replace(/[:.]/g, "-");
+  const filePath = import_node_path2.default.join(backupDir, `backup_solicitado_${timestamp}.csv`);
+  import_node_fs2.default.mkdirSync(backupDir, { recursive: true });
+  import_node_fs2.default.writeFileSync(filePath, buildBackupCsvText(rows), "utf8");
+  return { ok: true, filePath };
+}
+function findLatestBackupFile() {
+  const backupDir = getBackupDirectory();
+  if (!import_node_fs2.default.existsSync(backupDir)) return void 0;
+  const latest = import_node_fs2.default.readdirSync(backupDir).filter((fileName) => fileName.toLowerCase().endsWith(".csv")).map((fileName) => {
+    const filePath = import_node_path2.default.join(backupDir, fileName);
+    const stats = import_node_fs2.default.statSync(filePath);
+    return { filePath, mtimeMs: stats.mtimeMs };
+  }).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+  return latest?.filePath;
 }
 function normalizePhoneNumber(value) {
   return String(value ?? "").replace(/[^\d+]/g, "");
@@ -544,6 +635,27 @@ function withLinkedChatId(settings, chatId) {
     enabled: chatIds.length > 0
   });
 }
+function getChatIntervalMap(settings = notificationSettings) {
+  const fallbackInterval = Math.max(1, Math.min(60, Number(settings.heartbeatIntervalMinutes) || 60));
+  const entries = Object.entries(settings.chatIntervals ?? {}).map(([chatId, minutes]) => [
+    String(chatId ?? "").trim(),
+    Math.max(1, Math.min(60, Number(minutes) || fallbackInterval))
+  ]);
+  return Object.fromEntries(entries.filter(([chatId]) => Boolean(chatId)));
+}
+function getHeartbeatIntervalForChat(chatId, settings = notificationSettings) {
+  const normalizedChatId = String(chatId ?? "").trim();
+  const chatIntervals = getChatIntervalMap(settings);
+  return Math.max(1, Math.min(60, Number(chatIntervals[normalizedChatId]) || Number(settings.heartbeatIntervalMinutes) || 60));
+}
+function syncHeartbeatRecipients(baseTs) {
+  const linkedChatIds = getLinkedChatIds(notificationSettings);
+  const nextMap = {};
+  for (const chatId of linkedChatIds) {
+    nextMap[chatId] = lastHeartbeatNotificationAtByChat[chatId] ?? baseTs ?? 0;
+  }
+  lastHeartbeatNotificationAtByChat = nextMap;
+}
 async function sendTelegramMessage(text, chatId) {
   const token = getTelegramBotToken();
   if (!token) {
@@ -569,9 +681,121 @@ async function sendTelegramMessage(text, chatId) {
     throw new Error(`${description}${code}`);
   }
 }
+async function sendTelegramFile(method, fieldName, filePath, chatId, caption) {
+  const token = getTelegramBotToken();
+  if (!token) {
+    throw new Error("Token do Telegram nao configurado.");
+  }
+  const targetChatId = String(chatId ?? "").trim();
+  if (!targetChatId) {
+    throw new Error("Nenhum chat do Telegram vinculado.");
+  }
+  const fileBuffer = import_node_fs2.default.readFileSync(filePath);
+  const form = new FormData();
+  form.set("chat_id", targetChatId);
+  if (caption) {
+    form.set("caption", caption);
+  }
+  form.append(fieldName, new Blob([fileBuffer]), import_node_path2.default.basename(filePath));
+  const url = `https://api.telegram.org/bot${token}/${method}`;
+  const response = await fetch(url, {
+    method: "POST",
+    body: form
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload || payload.ok === false) {
+    const description = payload && "description" in payload && payload.description ? payload.description : `Falha HTTP ${response.status}`;
+    const code = payload && "error_code" in payload && payload.error_code ? ` (${payload.error_code})` : "";
+    throw new Error(`${description}${code}`);
+  }
+}
 var telegramUpdatesOffset = 0;
 async function handleTelegramDatavocCommand(chatId) {
   await sendTelegramMessage(buildTelegramVocDataMessage(), chatId);
+}
+async function handleTelegramMenuCommand(chatId) {
+  await sendTelegramMessage(buildTelegramMenuMessage(), chatId);
+}
+async function handleTelegramNotifyCommand(chatId, intervalMinutes) {
+  if (!intervalMinutes) {
+    await sendTelegramMessage(
+      "\u{1F514} Defina seu intervalo individual de notifica\xE7\xF5es.\nUse qualquer valor entre 1 e 60 minutos.\n\nExemplos:\n\u2022 /notificar 5 min\n\u2022 /notificar 15 min\n\u2022 /notificar 30 min\n\u2022 /notificar 60 min",
+      chatId
+    );
+    return;
+  }
+  if (!Number.isFinite(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 60) {
+    await sendTelegramMessage(
+      "Intervalo inv\xE1lido. Use um valor entre 1 e 60 minutos.",
+      chatId
+    );
+    return;
+  }
+  const chatIntervals = {
+    ...getChatIntervalMap(notificationSettings),
+    [chatId]: Math.round(intervalMinutes)
+  };
+  notificationSettings = normalizeNotificationSettings({
+    ...notificationSettings,
+    chatIntervals,
+    enabled: getLinkedChatIds(notificationSettings).length > 0
+  });
+  lastHeartbeatNotificationAtByChat[chatId] = lastCollectionAt ?? Date.now();
+  writeSettings({ notifications: notificationSettings });
+  publishNotificationSettings();
+  publishNotificationRuntimeState();
+  await sendTelegramMessage(`\u{1F514} Intervalo atualizado com sucesso.
+Suas notifica\xE7\xF5es peri\xF3dicas ser\xE3o enviadas a cada ${Math.round(intervalMinutes)} minutos.`, chatId);
+}
+async function handleTelegramBackupCommand(chatId) {
+  let filePath = findLatestBackupFile();
+  if (!filePath && collectionFrames.length > 0) {
+    const created = saveRequestedBackup(collectionFrames, Date.now());
+    if (created.ok) {
+      filePath = created.filePath;
+    }
+  }
+  if (!filePath) {
+    await sendTelegramMessage("Nenhum backup dispon\xEDvel no momento.", chatId);
+    return;
+  }
+  const stats = import_node_fs2.default.statSync(filePath);
+  const caption = `\u{1F4BE} Backup da coleta
+Arquivo: ${import_node_path2.default.basename(filePath)}
+Data: ${formatDateTimeInlinePtBr(stats.mtimeMs)}`;
+  await sendTelegramFile("sendDocument", "document", filePath, chatId, caption);
+}
+async function handleTelegramPrintCommand(chatId) {
+  const win = getMainWindow();
+  if (!win) {
+    await sendTelegramMessage("Nao foi possivel capturar a tela da EVA neste momento.", chatId);
+    return;
+  }
+  await prepareWindowForPrintCapture(win, lastSensorFrame);
+  const image = await win.webContents.capturePage();
+  const screenshotDir = import_node_path2.default.join(import_electron2.app.getPath("temp"), "eva-cortex");
+  const screenshotPath = import_node_path2.default.join(screenshotDir, `print_eva_${Date.now()}.png`);
+  import_node_fs2.default.mkdirSync(screenshotDir, { recursive: true });
+  import_node_fs2.default.writeFileSync(screenshotPath, image.toPNG());
+  try {
+    const captureAt = Date.now();
+    const latestDataText = lastSensorFrame ? `
+Ultimo dado: ${formatDateTimeInlinePtBr(lastSensorFrame.receivedAt)}` : "";
+    await sendTelegramFile(
+      "sendPhoto",
+      "photo",
+      screenshotPath,
+      chatId,
+      `\u{1F5BC} Captura atual da EVA
+Data: ${formatDateTimeInlinePtBr(captureAt)}${latestDataText}`
+    );
+  } finally {
+    win.webContents.send("dashboard:finish-print");
+    try {
+      import_node_fs2.default.unlinkSync(screenshotPath);
+    } catch {
+    }
+  }
 }
 function parseTelegramRegisterCode(text) {
   const raw = String(text ?? "").trim();
@@ -589,6 +813,13 @@ function parseTelegramRegisterCode(text) {
     return { code };
   }
   return null;
+}
+function parseTelegramNotifyInterval(text) {
+  const raw = String(text ?? "").trim();
+  const match = raw.match(/^\/notificar(?:@\w+)?(?:\s+(\d+))?(?:\s*(?:min|minuto|minutos))?$/i);
+  if (!match) return null;
+  const minutesText = String(match[1] ?? "").trim();
+  return { minutes: minutesText ? Number(minutesText) : void 0 };
 }
 async function handleTelegramRegisterCommand(chatId, providedCode) {
   const expectedCode = getTelegramLinkCode();
@@ -617,7 +848,6 @@ Vincula\xE7\xE3o conclu\xEDda.
 
 C\xF3digo: ${expectedCode}`, chatId);
   if (hasActiveCollection && lastCollectionAt) {
-    lastHeartbeatNotificationAt = lastCollectionAt;
     notifyCollectionResumedForNewRecipient(lastCollectionAt, chatId);
   }
 }
@@ -636,18 +866,50 @@ async function pollTelegramUpdates() {
     const chatId = update.message?.chat?.id;
     const rawText = String(update.message?.text ?? "").trim();
     const text = rawText.toLowerCase();
+    const chatIdText = chatId === void 0 || chatId === null ? "" : String(chatId);
+    const linkedChatIds = getLinkedChatIds(notificationSettings);
     const register = parseTelegramRegisterCode(rawText);
     if (register && chatId !== void 0 && chatId !== null) {
-      await handleTelegramRegisterCommand(String(chatId), register.code).catch(() => {
+      await handleTelegramRegisterCommand(chatIdText, register.code).catch(() => {
+      });
+      continue;
+    }
+    if ((text === "/menu" || text.startsWith("/menu@")) && chatId !== void 0 && chatId !== null) {
+      await handleTelegramMenuCommand(chatIdText).catch(() => {
+      });
+      continue;
+    }
+    const notifyCommand = parseTelegramNotifyInterval(rawText);
+    if (notifyCommand && chatId !== void 0 && chatId !== null) {
+      if (!linkedChatIds.includes(chatIdText)) {
+        await sendTelegramMessage("Nao vinculado. Envie /registrar EVA para conectar sua EVA ao Telegram.", chatIdText).catch(() => {
+        });
+        continue;
+      }
+      await handleTelegramNotifyCommand(chatIdText, notifyCommand.minutes).catch(() => {
       });
       continue;
     }
     if (text.startsWith("/datavoc")) {
-      const linkedChatIds = getLinkedChatIds(notificationSettings);
-      if (chatId !== void 0 && chatId !== null && linkedChatIds.includes(String(chatId))) {
-        await handleTelegramDatavocCommand(String(chatId)).catch(() => {
+      if (chatId !== void 0 && chatId !== null && linkedChatIds.includes(chatIdText)) {
+        await handleTelegramDatavocCommand(chatIdText).catch(() => {
         });
       }
+      continue;
+    }
+    if (text.startsWith("/backup")) {
+      if (chatId !== void 0 && chatId !== null && linkedChatIds.includes(chatIdText)) {
+        await handleTelegramBackupCommand(chatIdText).catch(() => {
+        });
+      }
+      continue;
+    }
+    if (text.startsWith("/print")) {
+      if (chatId !== void 0 && chatId !== null && linkedChatIds.includes(chatIdText)) {
+        await handleTelegramPrintCommand(chatIdText).catch(() => {
+        });
+      }
+      continue;
     }
     if (!notificationSettings.phoneNumber) continue;
     if (!contactPhone || chatId === void 0 || chatId === null) continue;
@@ -655,14 +917,14 @@ async function pollTelegramUpdates() {
     const incomingPhone = normalizePhoneNumber(contactPhone);
     if (!savedPhone || !incomingPhone) continue;
     if (savedPhone !== incomingPhone && !incomingPhone.endsWith(savedPhone.replace(/^\+/, ""))) continue;
-    const nextSettings = withLinkedChatId(notificationSettings, String(chatId));
+    const nextSettings = withLinkedChatId(notificationSettings, chatIdText);
     notificationSettings = nextSettings;
+    lastHeartbeatNotificationAtByChat[chatIdText] = lastCollectionAt ?? Date.now();
     writeSettings({ notifications: notificationSettings });
     publishNotificationSettings();
     publishNotificationRuntimeState();
     if (hasActiveCollection && lastCollectionAt) {
-      lastHeartbeatNotificationAt = lastCollectionAt;
-      notifyCollectionResumedForNewRecipient(lastCollectionAt, String(chatId));
+      notifyCollectionResumedForNewRecipient(lastCollectionAt, chatIdText);
     }
     break;
   }
@@ -706,15 +968,23 @@ Data: ${dateTimeText}`
   ).catch(() => {
   });
 }
-function notifyCollectionHeartbeat(ts) {
-  const intervalMinutes = notificationSettings.heartbeatIntervalMinutes;
-  sendTrackedNotification(
-    "intervalo",
-    `\u{1F4CA} Atualiza\xE7\xE3o peri\xF3dica
+function notifyCollectionHeartbeat(ts, chatId) {
+  const intervalMinutes = getHeartbeatIntervalForChat(chatId);
+  sendTelegramMessage(`\u{1F4CA} Atualiza\xE7\xE3o peri\xF3dica
 Coleta em andamento.
 
-Pr\xF3xima atualiza\xE7\xE3o em ${intervalMinutes} minutos.`
-  ).catch(() => {
+Pr\xF3xima atualiza\xE7\xE3o em ${intervalMinutes} minutos.`, chatId).then(() => {
+    publishNotificationRuntimeState({
+      lastSentAt: Date.now(),
+      lastSentKind: "intervalo",
+      lastErrorAt: void 0,
+      lastErrorMessage: void 0
+    });
+  }).catch((error) => {
+    publishNotificationRuntimeState({
+      lastErrorAt: Date.now(),
+      lastErrorMessage: error instanceof Error ? error.message : "Falha ao enviar notificacao."
+    });
   });
 }
 function notifyCollectionStopped(ts, backupResult) {
@@ -740,6 +1010,7 @@ A coleta j\xE1 est\xE1 em andamento.
 \xDAltima coleta registrada:
 ${datePart} \xE0s ${timePart}.`;
   if (chatId) {
+    lastHeartbeatNotificationAtByChat[chatId] = ts;
     sendTelegramMessage(text, chatId).catch(() => {
     });
     return;
@@ -761,8 +1032,13 @@ function computeNextNotificationAt() {
   if (!hasActiveCollection || !lastCollectionAt) return void 0;
   const timeoutMs = notificationSettings.staleTimeoutSeconds * 1e3;
   if (Date.now() - lastCollectionAt >= timeoutMs) return void 0;
-  const intervalMs = notificationSettings.heartbeatIntervalMinutes * 60 * 1e3;
-  return lastHeartbeatNotificationAt > 0 ? lastHeartbeatNotificationAt + intervalMs : void 0;
+  const nextValues = getLinkedChatIds(notificationSettings).map((chatId) => {
+    const lastSentAt = lastHeartbeatNotificationAtByChat[chatId];
+    if (!lastSentAt || lastSentAt <= 0) return void 0;
+    return lastSentAt + getHeartbeatIntervalForChat(chatId) * 60 * 1e3;
+  }).filter((value) => Boolean(value));
+  if (nextValues.length === 0) return void 0;
+  return Math.min(...nextValues);
 }
 function publishNotificationRuntimeState(partial) {
   notificationRuntimeState = {
@@ -782,6 +1058,33 @@ function broadcast(channel, payload) {
 }
 function getMainWindow() {
   return import_electron2.BrowserWindow.getAllWindows()[0];
+}
+async function prepareWindowForPrintCapture(win, frame) {
+  if (win.isMinimized()) {
+    win.restore();
+  }
+  if (!win.isVisible()) {
+    win.show();
+  }
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      import_electron2.ipcMain.removeListener("dashboard:print-ready", onReady);
+      resolve();
+    };
+    const onReady = (event) => {
+      if (event.sender.id !== win.webContents.id) return;
+      finish();
+    };
+    const timeoutId = setTimeout(finish, 1500);
+    import_electron2.ipcMain.on("dashboard:print-ready", onReady);
+    win.webContents.send("dashboard:prepare-print", frame);
+  });
+  win.webContents.invalidate();
+  await new Promise((resolve) => setTimeout(resolve, 120));
 }
 function configureAutoUpdater() {
   if (!import_electron2.app.isPackaged || process.platform !== "win32") return;
@@ -874,15 +1177,16 @@ function registerIpc() {
         ...normalizedNext,
         chatId: phoneChanged ? previousSettings.chatId : normalizedNext.chatId,
         chatIds: phoneChanged ? previousSettings.chatIds : normalizedNext.chatIds,
+        chatIntervals: previousSettings.chatIntervals,
         enabled: phoneChanged ? previousSettings.enabled : normalizedNext.enabled
       });
+      syncHeartbeatRecipients(lastCollectionAt ?? Date.now());
       writeSettings({ notifications: notificationSettings });
       publishNotificationSettings();
       publishNotificationRuntimeState();
       const recipientChanged = getLinkedChatIds(previousSettings).join("|") !== getLinkedChatIds(notificationSettings).join("|");
       const justEnabled = !previousSettings.enabled && notificationSettings.enabled;
       if ((recipientChanged || justEnabled) && hasActiveCollection && lastCollectionAt) {
-        lastHeartbeatNotificationAt = lastCollectionAt;
         notifyCollectionResumedForNewRecipient(lastCollectionAt);
       }
       return notificationSettings;
@@ -960,20 +1264,22 @@ serial.on("frame", (frame) => {
   if (!hasActiveCollection) {
     collectionFrames = [frame];
     hasActiveCollection = true;
-    lastHeartbeatNotificationAt = frame.receivedAt;
+    syncHeartbeatRecipients(frame.receivedAt);
     lastStopNotificationFor = 0;
     publishNotificationRuntimeState({ collectionState: "coletando" });
     notifyCollectionStarted(frame.receivedAt);
   } else {
     collectionFrames.push(frame);
-    const heartbeatIntervalMs = notificationSettings.heartbeatIntervalMinutes * 60 * 1e3;
-    if (frame.receivedAt - lastHeartbeatNotificationAt >= heartbeatIntervalMs) {
-      lastHeartbeatNotificationAt = frame.receivedAt;
-      publishNotificationRuntimeState({ collectionState: "coletando" });
-      notifyCollectionHeartbeat(frame.receivedAt);
-    } else {
-      publishNotificationRuntimeState({ collectionState: "coletando" });
+    syncHeartbeatRecipients(lastCollectionAt);
+    for (const chatId of getLinkedChatIds(notificationSettings)) {
+      const lastSentAt = lastHeartbeatNotificationAtByChat[chatId] ?? frame.receivedAt;
+      const heartbeatIntervalMs = getHeartbeatIntervalForChat(chatId) * 60 * 1e3;
+      if (frame.receivedAt - lastSentAt >= heartbeatIntervalMs) {
+        lastHeartbeatNotificationAtByChat[chatId] = frame.receivedAt;
+        notifyCollectionHeartbeat(frame.receivedAt, chatId);
+      }
     }
+    publishNotificationRuntimeState({ collectionState: "coletando" });
   }
   broadcast("serial:frame", frame);
 });
@@ -1008,7 +1314,7 @@ import_electron2.app.whenReady().then(async () => {
     if (lastStopNotificationFor === lastCollectionAt) return;
     lastStopNotificationFor = lastCollectionAt;
     hasActiveCollection = false;
-    lastHeartbeatNotificationAt = 0;
+    lastHeartbeatNotificationAtByChat = {};
     publishNotificationRuntimeState({ collectionState: "parada" });
     const backupResult = (() => {
       try {

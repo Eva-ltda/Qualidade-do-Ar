@@ -10,7 +10,7 @@ import { Footer } from './components/Footer'
 import { useSerial } from './hooks/useSerial'
 import { getAirQualityFromVoc, vocToPPM } from './lib/airQuality'
 import { formatInt, formatNumber } from './lib/format'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 function EnvironmentSection({
   title,
@@ -67,8 +67,10 @@ function EnvironmentSection({
 }
 
 function App() {
+  const api = window.eva
   const [updateValue, setUpdateValue] = useState(2)
   const [updateUnit, setUpdateUnit] = useState<'seconds' | 'minutes' | 'hours'>('seconds')
+  const [printFrameOverride, setPrintFrameOverride] = useState<SensorFrame | undefined>()
 
   const updateIntervalMs = useMemo(() => {
     const unitMs = updateUnit === 'seconds' ? 1000 : updateUnit === 'minutes' ? 60 * 1000 : 60 * 60 * 1000
@@ -91,13 +93,50 @@ function App() {
   } =
     useSerial(updateIntervalMs)
 
-  const vocInternoCorrigido = lastFrame?.vocInternoCorrigido ?? lastFrame?.vocInterno ?? Number.NaN
-  const vocExternoCorrigido = lastFrame?.vocExternoCorrigido ?? lastFrame?.vocExterno ?? Number.NaN
+  useEffect(() => {
+    if (!api) return
+
+    const unsubscribePrepare = api.onPrintCaptureRequest((frame) => {
+      setPrintFrameOverride(frame)
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          api.notifyPrintCaptureReady()
+        })
+      })
+    })
+
+    const unsubscribeFinished = api.onPrintCaptureFinished(() => {
+      setPrintFrameOverride(undefined)
+    })
+
+    return () => {
+      unsubscribePrepare()
+      unsubscribeFinished()
+    }
+  }, [api])
+
+  const displayFrame = printFrameOverride ?? lastFrame
+
+  const vocInternoCorrigido = displayFrame?.vocInternoCorrigido ?? displayFrame?.vocInterno ?? Number.NaN
+  const vocExternoCorrigido = displayFrame?.vocExternoCorrigido ?? displayFrame?.vocExterno ?? Number.NaN
   const ppmInterno = vocToPPM(vocInternoCorrigido)
   const ppmExterno = vocToPPM(vocExternoCorrigido)
 
   const qi = getAirQualityFromVoc(vocInternoCorrigido)
   const qe = getAirQualityFromVoc(vocExternoCorrigido)
+  const displayHistory = useMemo(() => {
+    if (!printFrameOverride) return history
+
+    const current = history[history.length - 1]
+    if (current?.ts === printFrameOverride.receivedAt) return history
+
+    const printQi = getAirQualityFromVoc(printFrameOverride.vocInternoCorrigido)
+    const printQe = getAirQualityFromVoc(printFrameOverride.vocExternoCorrigido)
+    const t = new Date(printFrameOverride.receivedAt).toLocaleTimeString('pt-BR', { hour12: false })
+
+    return [...history, { t, ts: printFrameOverride.receivedAt, interno: printQi.percent, externo: printQe.percent }].slice(-30)
+  }, [history, printFrameOverride])
 
   return (
     <div className="min-h-full">
@@ -110,8 +149,8 @@ function App() {
         onExport={() => exportCsv()}
         onConnect={connect}
         status={status}
-        lastReceivedAt={lastFrame?.receivedAt}
-        lastRaw={lastFrame?.raw}
+        lastReceivedAt={displayFrame?.receivedAt}
+        lastRaw={displayFrame?.raw}
         updateValue={updateValue}
         onUpdateValueChange={setUpdateValue}
         updateUnit={updateUnit}
@@ -125,9 +164,9 @@ function App() {
               title="🏠 Ambiente Interno (BME680)"
               temperatureColor={{ icon: 'text-red-600', bar: 'bg-red-500' }}
               values={{
-                temp: lastFrame?.tempInterno ?? Number.NaN,
-                hum: lastFrame?.humInterno ?? Number.NaN,
-                press: lastFrame?.pressInterno ?? Number.NaN,
+                temp: displayFrame?.tempInterno ?? Number.NaN,
+                hum: displayFrame?.humInterno ?? Number.NaN,
+                press: displayFrame?.pressInterno ?? Number.NaN,
                 ppm: ppmInterno,
               }}
             />
@@ -138,9 +177,9 @@ function App() {
               title="🌳 Ambiente Externo (BME680)"
               temperatureColor={{ icon: 'text-orange-600', bar: 'bg-orange-500' }}
               values={{
-                temp: lastFrame?.tempExterno ?? Number.NaN,
-                hum: lastFrame?.humExterno ?? Number.NaN,
-                press: lastFrame?.pressExterno ?? Number.NaN,
+                temp: displayFrame?.tempExterno ?? Number.NaN,
+                hum: displayFrame?.humExterno ?? Number.NaN,
+                press: displayFrame?.pressExterno ?? Number.NaN,
                 ppm: ppmExterno,
               }}
             />
@@ -162,7 +201,7 @@ function App() {
           </div>
 
           <div className="col-span-12 xl:col-span-8">
-            <HistoryChart data={history} />
+            <HistoryChart data={displayHistory} />
           </div>
           <div className="col-span-12 xl:col-span-4">
             <StatusPanel portPath={status.portPath} status={status} lines={serialLines} onClear={clearSerialLines} />

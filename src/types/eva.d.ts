@@ -7,6 +7,7 @@ declare global {
     chatId?: string
     chatIds?: string[]
     chatIntervals?: Record<string, number>
+    chatBackupIntervals?: Record<string, number>
     heartbeatIntervalMinutes: number
     staleTimeoutSeconds: number
   }
@@ -81,11 +82,14 @@ declare global {
       disconnect(): Promise<boolean>
       exportCsv(csvText: string): Promise<ExportResult>
       backupCsv(csvText: string): Promise<ExportResult>
+      notifyPrintCaptureReady(): void
       onFrame(handler: (frame: SensorFrame) => void): Unsubscribe
       onRawLine(handler: (line: SerialRawLine) => void): Unsubscribe
       onStatus(handler: (status: ConnectionStatus) => void): Unsubscribe
       onNotificationRuntimeState(handler: (state: NotificationRuntimeState) => void): Unsubscribe
       onNotificationSettings(handler: (settings: NotificationSettings) => void): Unsubscribe
+      onPrintCaptureRequest(handler: (frame?: SensorFrame) => void): Unsubscribe
+      onPrintCaptureFinished(handler: () => void): Unsubscribe
     }
   }
 }
