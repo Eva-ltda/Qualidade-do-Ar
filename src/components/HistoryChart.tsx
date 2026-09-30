@@ -9,9 +9,9 @@ import {
   YAxis,
 } from 'recharts'
 
-type Point = { t: string; interno: number; externo: number; ts: number }
+type Point = { t: string; interno?: number; externo?: number; ts: number }
 
-export function HistoryChart({ data }: { data: Point[] }) {
+export function HistoryChart({ data, dualMode = true }: { data: Point[]; dualMode?: boolean }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
@@ -21,7 +21,9 @@ export function HistoryChart({ data }: { data: Point[] }) {
     >
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="text-sm font-semibold text-slate-900">Histórico - Qualidade do Ar Interno vs Externo</div>
+          <div className="text-sm font-semibold text-slate-900">
+            {dualMode ? 'Histórico - Qualidade do Ar Interno vs Externo' : 'Histórico - Medições salvas'}
+          </div>
           <div className="mt-1 text-xs text-slate-500">{data.length} pontos exibidos</div>
         </div>
         <div className="flex flex-wrap items-center gap-4 text-xs font-medium text-slate-600">
@@ -54,7 +56,7 @@ export function HistoryChart({ data }: { data: Point[] }) {
                 boxShadow: '0 10px 30px rgba(16,24,40,0.10)',
               }}
               labelStyle={{ fontWeight: 600, color: '#0f172a' }}
-              formatter={(v) => [`${v}%`, '']}
+              formatter={(v) => (v !== undefined ? [`${v}%`, ''] : ['—', ''])}
             />
             <Line
               type="monotone"

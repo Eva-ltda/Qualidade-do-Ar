@@ -1,81 +1,23 @@
-import { Thermometer, Droplets, Gauge, Leaf } from 'lucide-react'
 import { Header } from './components/Header'
 import { NotificationPanel } from './components/NotificationPanel'
-import { SensorCard } from './components/SensorCard'
 import { VOCGauge } from './components/VOCGauge'
 import { StatusPanel } from './components/StatusPanel'
 import { HistoryChart } from './components/HistoryChart'
 import { SerialPanel } from './components/SerialPanel'
 import { Footer } from './components/Footer'
+import { LocationSelector } from './components/LocationSelector'
+import { MeasurementPanel } from './components/MeasurementPanel'
 import { useSerial } from './hooks/useSerial'
-import { getAirQualityFromVoc, vocToPPM } from './lib/airQuality'
-import { formatInt, formatNumber } from './lib/format'
+import { getAirQualityFromVoc } from './lib/airQuality'
 import { useEffect, useMemo, useState } from 'react'
-
-function EnvironmentSection({
-  title,
-  temperatureColor,
-  values,
-}: {
-  title: string
-  temperatureColor: { icon: string; bar: string }
-  values: { temp: number; hum: number; press: number; ppm: number }
-}) {
-  return (
-    <section className="rounded-2xl bg-white p-5 shadow-card ring-1 ring-slate-200">
-      <div className="flex items-center justify-between gap-4">
-        <div className="text-sm font-semibold text-slate-900">{title}</div>
-        <div className="text-xs font-medium text-slate-500">BME680</div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <SensorCard
-          title="Temperatura"
-          value={formatNumber(values.temp, 1)}
-          unit="°C"
-          icon={<Thermometer className="h-5 w-5" />}
-          iconClassName={temperatureColor.icon}
-          barClassName={temperatureColor.bar}
-        />
-        <SensorCard
-          title="Umidade"
-          value={formatInt(values.hum)}
-          unit="%"
-          icon={<Droplets className="h-5 w-5" />}
-          iconClassName="text-blue-600"
-          barClassName="bg-blue-500"
-        />
-        <SensorCard
-          title="Pressão"
-          value={formatInt(values.press)}
-          unit="hPa"
-          icon={<Gauge className="h-5 w-5" />}
-          iconClassName="text-purple-600"
-          barClassName="bg-purple-500"
-        />
-        <SensorCard
-          title="PPM"
-          value={formatInt(values.ppm)}
-          unit="ppm"
-          icon={<Leaf className="h-5 w-5" />}
-          iconClassName="text-emerald-600"
-          barClassName="bg-emerald-500"
-        />
-      </div>
-    </section>
-  )
-}
 
 function App() {
   const api = window.eva
-  const [updateValue, setUpdateValue] = useState(2)
+  const [updateValue, setUpdateValue] = useState(4)
   const [updateUnit, setUpdateUnit] = useState<'seconds' | 'minutes' | 'hours'>('seconds')
   const [printFrameOverride, setPrintFrameOverride] = useState<SensorFrame | undefined>()
-
-  const updateIntervalMs = useMemo(() => {
-    const unitMs = updateUnit === 'seconds' ? 1000 : updateUnit === 'minutes' ? 60 * 1000 : 60 * 60 * 1000
-    return Math.max(1, updateValue) * unitMs
-  }, [updateUnit, updateValue])
+  const [lastInternalFrame, setLastInternalFrame] = useState<SensorFrame | null>(null)
+  const [lastExternalFrame, setLastExternalFrame] = useState<SensorFrame | null>(null)
 
   const {
     ports,
@@ -90,15 +32,33 @@ function App() {
     connect,
     exportCsv,
     backupCsv,
-  } =
-    useSerial(updateIntervalMs)
+    currentLocation,
+    confirmedLocation,
+    arduinoState,
+    setLocation,
+    measurementState,
+    stabilizationEndsAt,
+    now,
+  } = useSerial()
+
+  useEffect(() => {
+    if (!lastFrame) return
+    const loc = lastFrame.location === 'EXTERNO' ? 'EXTERNO' : 'INTERNO'
+    if (measurementState === 'stabilizing') return
+    queueMicrotask(() => {
+      if (loc === 'INTERNO') {
+        setLastInternalFrame(lastFrame)
+      } else {
+        setLastExternalFrame(lastFrame)
+      }
+    })
+  }, [lastFrame, measurementState])
 
   useEffect(() => {
     if (!api) return
 
     const unsubscribePrepare = api.onPrintCaptureRequest((frame) => {
       setPrintFrameOverride(frame)
-
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           api.notifyPrintCaptureReady()
@@ -118,24 +78,35 @@ function App() {
 
   const displayFrame = printFrameOverride ?? lastFrame
 
-  const vocInternoCorrigido = displayFrame?.vocInternoCorrigido ?? displayFrame?.vocInterno ?? Number.NaN
-  const vocExternoCorrigido = displayFrame?.vocExternoCorrigido ?? displayFrame?.vocExterno ?? Number.NaN
-  const ppmInterno = vocToPPM(vocInternoCorrigido)
-  const ppmExterno = vocToPPM(vocExternoCorrigido)
+  const frameVoc = (frame: SensorFrame | null | undefined) =>
+    frame && Number.isFinite(frame.vocCorrigido ?? NaN)
+      ? frame!.vocCorrigido
+      : (frame?.voc ?? Number.NaN)
 
-  const qi = getAirQualityFromVoc(vocInternoCorrigido)
-  const qe = getAirQualityFromVoc(vocExternoCorrigido)
+  const vocInternal = frameVoc(lastInternalFrame)
+  const vocExternal = frameVoc(lastExternalFrame)
+  const qInternal = Number.isFinite(vocInternal) ? getAirQualityFromVoc(vocInternal) : null
+  const qExternal = Number.isFinite(vocExternal) ? getAirQualityFromVoc(vocExternal) : null
+
   const displayHistory = useMemo(() => {
     if (!printFrameOverride) return history
-
     const current = history[history.length - 1]
     if (current?.ts === printFrameOverride.receivedAt) return history
-
-    const printQi = getAirQualityFromVoc(printFrameOverride.vocInternoCorrigido)
-    const printQe = getAirQualityFromVoc(printFrameOverride.vocExternoCorrigido)
+    const fVoc = Number.isFinite(printFrameOverride.vocCorrigido)
+      ? printFrameOverride.vocCorrigido
+      : printFrameOverride.voc
+    const qFrame = getAirQualityFromVoc(fVoc)
     const t = new Date(printFrameOverride.receivedAt).toLocaleTimeString('pt-BR', { hour12: false })
-
-    return [...history, { t, ts: printFrameOverride.receivedAt, interno: printQi.percent, externo: printQe.percent }].slice(-30)
+    const isInternal = printFrameOverride.location === 'INTERNO'
+    return [
+      ...history,
+      {
+        t,
+        ts: printFrameOverride.receivedAt,
+        interno: isInternal ? qFrame.percent : undefined,
+        externo: !isInternal ? qFrame.percent : undefined,
+      },
+    ].slice(-200)
   }, [history, printFrameOverride])
 
   return (
@@ -151,6 +122,9 @@ function App() {
         status={status}
         lastReceivedAt={displayFrame?.receivedAt}
         lastRaw={displayFrame?.raw}
+        currentLocation={currentLocation}
+        arduinoState={arduinoState}
+        confirmedLocation={confirmedLocation}
         updateValue={updateValue}
         onUpdateValueChange={setUpdateValue}
         updateUnit={updateUnit}
@@ -159,60 +133,79 @@ function App() {
 
       <main className="mx-auto max-w-[1400px] px-6 py-6">
         <div className="grid grid-cols-12 gap-6">
-          <div className="col-span-12 xl:col-span-6">
-            <EnvironmentSection
-              title="🏠 Ambiente Interno (BME680)"
-              temperatureColor={{ icon: 'text-red-600', bar: 'bg-red-500' }}
-              values={{
-                temp: displayFrame?.tempInterno ?? Number.NaN,
-                hum: displayFrame?.humInterno ?? Number.NaN,
-                press: displayFrame?.pressInterno ?? Number.NaN,
-                ppm: ppmInterno,
-              }}
-            />
-          </div>
-
-          <div className="col-span-12 xl:col-span-6">
-            <EnvironmentSection
-              title="🌳 Ambiente Externo (BME680)"
-              temperatureColor={{ icon: 'text-orange-600', bar: 'bg-orange-500' }}
-              values={{
-                temp: displayFrame?.tempExterno ?? Number.NaN,
-                hum: displayFrame?.humExterno ?? Number.NaN,
-                press: displayFrame?.pressExterno ?? Number.NaN,
-                ppm: ppmExterno,
-              }}
-            />
-          </div>
-
-          <div className="col-span-12 xl:col-span-6">
-            <VOCGauge
-              title="Qualidade do Ar Interno"
-              vocCalibrado={vocInternoCorrigido}
-              quality={qi}
-            />
-          </div>
-          <div className="col-span-12 xl:col-span-6">
-            <VOCGauge
-              title="Qualidade do Ar Externo"
-              vocCalibrado={vocExternoCorrigido}
-              quality={qe}
-            />
+          <div className="col-span-12 xl:col-span-4">
+            <section className="rounded-2xl bg-white p-5 shadow-card ring-1 ring-slate-200">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Local da medição
+              </div>
+              <h2 className="mt-1 text-lg font-semibold text-slate-900">
+                Onde está o sensor BME680 agora?
+              </h2>
+              <p className="mt-2 text-xs text-slate-500">
+                Selecione o ambiente. Ao trocar, inicia automaticamente a estabilização de 120 segundos.
+              </p>
+              <div className="mt-4">
+                <LocationSelector
+                  current={currentLocation}
+                  onChange={setLocation}
+                  arduinoState={arduinoState}
+                  confirmedLocation={confirmedLocation}
+                  disabled={arduinoState === 'AGUARDANDO_ACK' || status.state !== 'connected'}
+                />
+              </div>
+            </section>
           </div>
 
           <div className="col-span-12 xl:col-span-8">
-            <HistoryChart data={displayHistory} />
+            <MeasurementPanel
+              location={currentLocation}
+              lastFrame={lastFrame}
+              measurementState={measurementState}
+              stabilizationEndsAt={stabilizationEndsAt}
+              now={now}
+              arduinoState={arduinoState}
+              confirmedLocation={confirmedLocation}
+            />
+          </div>
+
+          <div className="col-span-12 xl:col-span-6">
+            <VOCGauge
+              title="Medição Atual Local: Interno"
+              subtitle={
+                lastInternalFrame
+                  ? new Date(lastInternalFrame.receivedAt).toLocaleString('pt-BR', { hour12: false })
+                  : 'Aguardando primeira coleta do ambiente interno'
+              }
+              vocCalibrado={vocInternal}
+              quality={qInternal ?? { label: 'Aguardando', percent: 0 }}
+            />
+          </div>
+          <div className="col-span-12 xl:col-span-6">
+            <VOCGauge
+              title="Medição Atual Local: Externo"
+              subtitle={
+                lastExternalFrame
+                  ? new Date(lastExternalFrame.receivedAt).toLocaleString('pt-BR', { hour12: false })
+                  : 'Aguardando primeira coleta do ambiente externo'
+              }
+              vocCalibrado={vocExternal}
+              quality={qExternal ?? { label: 'Aguardando', percent: 0 }}
+            />
+          </div>
+
+          <div className="col-span-12">
+            <HistoryChart data={displayHistory} dualMode={true} />
+          </div>
+
+          <div className="col-span-12 xl:col-span-8">
+            <SerialPanel />
           </div>
           <div className="col-span-12 xl:col-span-4">
             <StatusPanel portPath={status.portPath} status={status} lines={serialLines} onClear={clearSerialLines} />
           </div>
 
           <div className="col-span-12">
-            <NotificationPanel />
-          </div>
-
-          <div className="col-span-12">
-            <SerialPanel />
+            <NotificationPanel currentLocation={currentLocation} />
           </div>
         </div>
 

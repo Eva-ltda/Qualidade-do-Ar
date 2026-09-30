@@ -60,6 +60,32 @@ type Props = {
   onUpdateValueChange: (value: number) => void
   updateUnit: 'seconds' | 'minutes' | 'hours'
   onUpdateUnitChange: (value: 'seconds' | 'minutes' | 'hours') => void
+  currentLocation?: MeasurementLocation
+  arduinoState?: ArduinoConnectionState
+  confirmedLocation?: MeasurementLocation
+}
+
+const ARDUINO_STATE_STYLES: Record<
+  ArduinoConnectionState,
+  { label: string; tone: string }
+> = {
+  CONFIRMADO: { label: 'CONFIRMADO', tone: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
+  AGUARDANDO_ACK: {
+    label: 'AGUARDANDO',
+    tone: 'bg-amber-50 text-amber-700 ring-amber-200',
+  },
+  NAO_RESPONDEU: {
+    label: 'NÃO RESPONDEU',
+    tone: 'bg-rose-50 text-rose-700 ring-rose-200',
+  },
+  INCOMPATIVEL: {
+    label: 'INCOMPATÍVEL',
+    tone: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
+  },
+  DESCONHECIDO: {
+    label: 'DESCONHECIDO',
+    tone: 'bg-slate-50 text-slate-600 ring-slate-200',
+  },
 }
 
 export function Header({
@@ -77,6 +103,9 @@ export function Header({
   onUpdateValueChange,
   updateUnit,
   onUpdateUnitChange,
+  currentLocation,
+  arduinoState,
+  confirmedLocation,
 }: Props) {
   const [clock, setClock] = useState(() => Date.now())
   const [logoSrc, setLogoSrc] = useState<string>(evaLogoUrl)
@@ -135,7 +164,6 @@ export function Header({
             <div className="leading-tight">
               <div className="text-sm font-semibold text-slate-900">Eva LTDA</div>
               <div className="text-xl font-semibold text-slate-900">Dashboard Qualidade do Ar</div>
-              <div className="text-sm text-slate-500">Monitoramento com Arduino + 2 Sensores BME680</div>
             </div>
           </div>
 
@@ -159,6 +187,25 @@ export function Header({
               </button>
 
               <ConnectionStatus status={status} />
+
+              <div
+                className={`rounded-xl px-3 py-2 text-xs font-semibold shadow-card ring-1 ${
+                  currentLocation === 'EXTERNO'
+                    ? 'bg-sky-50 text-sky-700 ring-sky-200'
+                    : 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                }`}
+              >
+                Sensor: {currentLocation ?? 'INTERNO'}
+              </div>
+
+              <div
+                className={`rounded-xl px-3 py-2 text-xs font-semibold shadow-card ring-1 ${
+                  ARDUINO_STATE_STYLES[arduinoState ?? 'DESCONHECIDO'].tone
+                }`}
+                title={confirmedLocation ? `Arduino respondeu: ${confirmedLocation}` : 'Sem confirmação do Arduino'}
+              >
+                Arduino: {ARDUINO_STATE_STYLES[arduinoState ?? 'DESCONHECIDO'].label}
+              </div>
 
               <div className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-card ring-1 ring-slate-200">
                 {new Date(clock).toLocaleTimeString('pt-BR', { hour12: false })}

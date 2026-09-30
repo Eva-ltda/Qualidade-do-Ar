@@ -22,11 +22,35 @@ var api = {
   testNotification(settings) {
     return import_electron.ipcRenderer.invoke("notifications:testNotification", settings);
   },
+  getSavedMeasurements() {
+    return import_electron.ipcRenderer.invoke("measurements:get");
+  },
+  setLastLocation(location) {
+    return import_electron.ipcRenderer.invoke("measurements:setLastLocation", location);
+  },
+  saveMeasurement(measurement) {
+    return import_electron.ipcRenderer.invoke("measurements:save", measurement);
+  },
+  clearSavedMeasurements() {
+    return import_electron.ipcRenderer.invoke("measurements:clear");
+  },
   connect(portPath) {
     return import_electron.ipcRenderer.invoke("serial:connect", portPath);
   },
   disconnect() {
     return import_electron.ipcRenderer.invoke("serial:disconnect");
+  },
+  sendCommand(command) {
+    return import_electron.ipcRenderer.invoke("serial:sendCommand", command);
+  },
+  requestStatus() {
+    return import_electron.ipcRenderer.invoke("serial:requestStatus");
+  },
+  ping() {
+    return import_electron.ipcRenderer.invoke("serial:ping");
+  },
+  requestSetLocation(location) {
+    return import_electron.ipcRenderer.invoke("serial:requestSetLocation", location);
   },
   exportCsv(csvText) {
     return import_electron.ipcRenderer.invoke("data:exportCsv", csvText);
@@ -46,6 +70,16 @@ var api = {
     const listener = (_e, payload) => handler(payload);
     import_electron.ipcRenderer.on("serial:rawLine", listener);
     return () => import_electron.ipcRenderer.removeListener("serial:rawLine", listener);
+  },
+  onControl(handler) {
+    const listener = (_e, payload) => handler(payload);
+    import_electron.ipcRenderer.on("serial:control", listener);
+    return () => import_electron.ipcRenderer.removeListener("serial:control", listener);
+  },
+  onTxLine(handler) {
+    const listener = (_e, payload) => handler(payload);
+    import_electron.ipcRenderer.on("serial:txLine", listener);
+    return () => import_electron.ipcRenderer.removeListener("serial:txLine", listener);
   },
   onStatus(handler) {
     const listener = (_e, payload) => handler(payload);
