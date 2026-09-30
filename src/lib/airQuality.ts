@@ -1,8 +1,58 @@
-export type AirQualityLabel = 'Excelente' | 'Boa' | 'Moderada' | 'Ruim' | 'Muito Ruim'
+export type AirQualityLabel = 'Excelente' | 'Boa' | 'Moderada' | 'Ruim' | 'Muito Ruim' | 'Aguardando'
 
 export type AirQuality = {
   label: AirQualityLabel
   percent: number
+  tone: string
+  text: string
+  bar: string
+  chip: string
+  fill: string
+}
+
+const QUALITY_PALETTE: Record<AirQualityLabel, Omit<AirQuality, 'label' | 'percent'>> = {
+  Excelente: {
+    tone: 'emerald-500',
+    text: 'text-emerald-700',
+    bar: 'bg-gradient-to-r from-emerald-400 to-emerald-600',
+    chip: 'bg-emerald-50 ring-emerald-200 text-emerald-700',
+    fill: '#10b981',
+  },
+  Boa: {
+    tone: 'green-500',
+    text: 'text-green-700',
+    bar: 'bg-gradient-to-r from-green-400 to-green-600',
+    chip: 'bg-green-50 ring-green-200 text-green-700',
+    fill: '#22c55e',
+  },
+  Moderada: {
+    tone: 'amber-500',
+    text: 'text-amber-700',
+    bar: 'bg-gradient-to-r from-amber-400 to-amber-600',
+    chip: 'bg-amber-50 ring-amber-200 text-amber-700',
+    fill: '#f59e0b',
+  },
+  Ruim: {
+    tone: 'orange-500',
+    text: 'text-orange-700',
+    bar: 'bg-gradient-to-r from-orange-400 to-orange-600',
+    chip: 'bg-orange-50 ring-orange-200 text-orange-700',
+    fill: '#f97316',
+  },
+  'Muito Ruim': {
+    tone: 'red-500',
+    text: 'text-red-700',
+    bar: 'bg-gradient-to-r from-red-400 to-red-700',
+    chip: 'bg-red-50 ring-red-200 text-red-700',
+    fill: '#ef4444',
+  },
+  Aguardando: {
+    tone: 'slate-400',
+    text: 'text-slate-500',
+    bar: 'bg-slate-200',
+    chip: 'bg-slate-50 ring-slate-200 text-slate-500',
+    fill: '#94a3b8',
+  },
 }
 
 const VOC_TO_PPM_TABLE = [
@@ -56,16 +106,20 @@ function ppmToPercent(ppm: number) {
 }
 
 export function getAirQualityFromVoc(voc: number): AirQuality {
-  if (!Number.isFinite(voc) || voc <= 0) return { label: 'Muito Ruim', percent: 0 }
+  if (!Number.isFinite(voc) || voc <= 0) {
+    return { label: 'Muito Ruim', percent: 0, ...QUALITY_PALETTE['Muito Ruim'] }
+  }
 
   const ppm = vocToPPM(voc)
   const percent = ppmToPercent(ppm)
 
-  if (ppm <= 65) return { label: 'Excelente', percent }
-  if (ppm <= 150) return { label: 'Boa', percent }
-  if (ppm <= 300) return { label: 'Moderada', percent }
-  if (ppm <= 500) return { label: 'Ruim', percent }
-  return { label: 'Muito Ruim', percent }
+  let label: AirQualityLabel = 'Muito Ruim'
+  if (ppm <= 65) label = 'Excelente'
+  else if (ppm <= 150) label = 'Boa'
+  else if (ppm <= 300) label = 'Moderada'
+  else if (ppm <= 500) label = 'Ruim'
+
+  return { label, percent, ...QUALITY_PALETTE[label] }
 }
 
 export function getQualityTone(label: AirQualityLabel) {
@@ -73,6 +127,7 @@ export function getQualityTone(label: AirQualityLabel) {
   if (label === 'Boa') return { stroke: 'stroke-green-500', text: 'text-green-700' }
   if (label === 'Moderada') return { stroke: 'stroke-amber-500', text: 'text-amber-700' }
   if (label === 'Ruim') return { stroke: 'stroke-orange-500', text: 'text-orange-700' }
+  if (label === 'Aguardando') return { stroke: 'stroke-slate-300', text: 'text-slate-500' }
   return { stroke: 'stroke-red-500', text: 'text-red-700' }
 }
 

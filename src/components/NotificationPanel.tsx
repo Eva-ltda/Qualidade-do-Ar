@@ -15,7 +15,13 @@ const defaultRuntimeState: NotificationRuntimeState = {
   collectionState: 'aguardando',
 }
 
-export function NotificationPanel() {
+type Props = {
+  currentLocation?: MeasurementLocation
+}
+
+export function NotificationPanel({ currentLocation }: Props) {
+  // Referência para tipagem consistente com App - não usada em UI por enquanto.
+  void currentLocation
   const api = (window as unknown as { eva?: Window['eva'] }).eva
   const [settings, setSettings] = useState<NotificationSettings>(defaultSettings)
   const [runtimeState, setRuntimeState] = useState<NotificationRuntimeState>(defaultRuntimeState)
@@ -64,8 +70,10 @@ export function NotificationPanel() {
 
   useEffect(() => {
     if (!api) {
-      setLoading(false)
-      setFeedback('API de notificacoes indisponivel.')
+      queueMicrotask(() => {
+        setLoading(false)
+        setFeedback('API de notificacoes indisponivel.')
+      })
       return
     }
 

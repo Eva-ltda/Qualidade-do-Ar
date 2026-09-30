@@ -31,6 +31,12 @@ var import_electron_updater = require("electron-updater");
 var import_node_events = require("events");
 var import_serialport = require("serialport");
 var import_parser_readline = require("@serialport/parser-readline");
+function toNumberPtBr(input) {
+  const cleaned = String(input ?? "").trim().replace(",", ".");
+  if (!cleaned) return Number.NaN;
+  return Number(cleaned);
+}
+var DEFAULT_LOCATION = "INTERNO";
 var SerialManager = class extends import_node_events.EventEmitter {
   port;
   desiredPortPath;
@@ -38,6 +44,7 @@ var SerialManager = class extends import_node_events.EventEmitter {
   reconnectTimer;
   staleTimer;
   userInitiatedDisconnect = false;
+  lastLocation = DEFAULT_LOCATION;
   on(event, listener) {
     return super.on(event, listener);
   }
@@ -57,6 +64,51 @@ var SerialManager = class extends import_node_events.EventEmitter {
       productId: p.productId,
       friendlyName: p.friendlyName
     }));
+  }
+  async sendCommand(command) {
+    const port = this.port;
+    if (!port || !port.isOpen) {
+      const error = new Error("Porta serial n\xE3o est\xE1 aberta.");
+      this.emit("control", { type: "COMMAND_ERROR", error: error.message, raw: command, receivedAt: Date.now() });
+      throw error;
+    }
+    const trimmedCmd = String(command ?? "").trimEnd();
+    if (!trimmedCmd) {
+      const error = new Error("Comando vazio.");
+      this.emit("control", { type: "COMMAND_ERROR", error: error.message, raw: command, receivedAt: Date.now() });
+      throw error;
+    }
+    const payload = trimmedCmd + "\n";
+    const now = Date.now();
+    this.emit("txLine", { text: trimmedCmd, receivedAt: now, direction: "tx", kind: "control" });
+    this.emit("control", { type: "TX_SENT", raw: trimmedCmd, receivedAt: now });
+    await new Promise((resolve, reject) => {
+      port.write(payload, (err) => {
+        if (err) {
+          this.emit("control", {
+            type: "COMMAND_ERROR",
+            error: err?.message ?? "Erro ao escrever na serial.",
+            raw: trimmedCmd,
+            receivedAt: Date.now()
+          });
+          reject(err);
+          return;
+        }
+        port.drain((drainErr) => {
+          if (drainErr) {
+            this.emit("control", {
+              type: "COMMAND_ERROR",
+              error: drainErr?.message ?? "Erro ao drenar buffer serial.",
+              raw: trimmedCmd,
+              receivedAt: Date.now()
+            });
+            reject(drainErr);
+            return;
+          }
+          resolve();
+        });
+      });
+    });
   }
   async connect(portPath, baudRate = 9600) {
     this.userInitiatedDisconnect = false;
@@ -86,7 +138,16 @@ var SerialManager = class extends import_node_events.EventEmitter {
       const trimmed = String(line ?? "").trim();
       if (!trimmed) return;
       const now = Date.now();
-      this.emit("rawLine", { text: trimmed, receivedAt: now });
+      const controlEvent = this.parseControl(trimmed, now);
+      if (controlEvent) {
+        this.emit("rawLine", { text: trimmed, receivedAt: now, direction: "rx", kind: "control" });
+        this.emit("control", controlEvent);
+        if (controlEvent.type === "ACK" || controlEvent.type === "STATUS") {
+          this.lastLocation = controlEvent.location;
+        }
+        return;
+      }
+      this.emit("rawLine", { text: trimmed, receivedAt: now, direction: "rx", kind: "data" });
       const frame = this.parseFrame(trimmed);
       if (!frame) return;
       this.setStatus({ state: "connected", portPath, lastReceivedAt: now });
@@ -104,6 +165,10 @@ var SerialManager = class extends import_node_events.EventEmitter {
     });
     this.setStatus({ state: "connected", portPath, lastReceivedAt: this.status.lastReceivedAt });
     this.startStaleDetection();
+    setTimeout(() => {
+      this.sendCommand("STATUS").catch(() => {
+      });
+    }, 250);
   }
   async disconnect() {
     this.userInitiatedDisconnect = true;
@@ -163,14 +228,82 @@ var SerialManager = class extends import_node_events.EventEmitter {
     if (this.staleTimer) clearInterval(this.staleTimer);
     this.staleTimer = void 0;
   }
+  setLastLocation(location) {
+    this.lastLocation = location;
+  }
+  getLastLocation() {
+    return this.lastLocation;
+  }
+  parseControl(rawLine, receivedAt) {
+    if (!rawLine) return null;
+    if (rawLine === "PONG") {
+      return { type: "PONG", raw: rawLine, receivedAt };
+    }
+    if (rawLine.startsWith("ACK:")) {
+      const rawLoc = rawLine.slice("ACK:".length).trim().toUpperCase();
+      const location = rawLoc === "EXTERNO" ? "EXTERNO" : "INTERNO";
+      return { type: "ACK", location, raw: rawLine, receivedAt };
+    }
+    if (rawLine.startsWith("STATUS:")) {
+      const rawLoc = rawLine.slice("STATUS:".length).trim().toUpperCase();
+      const location = rawLoc === "EXTERNO" ? "EXTERNO" : "INTERNO";
+      return { type: "STATUS", location, raw: rawLine, receivedAt };
+    }
+    return null;
+  }
   parseFrame(rawLine) {
     if (!rawLine) return null;
+    const hasSemicolon = rawLine.includes(";");
+    if (hasSemicolon) return this.parseNewFormat(rawLine);
+    return this.parseLegacyFormat(rawLine);
+  }
+  parseNewFormat(rawLine) {
+    const parts = rawLine.split(";").map((s) => s.trim());
+    if (parts.length < 5) return null;
+    const rawLocation = (parts[0] ?? "").toUpperCase();
+    const location = rawLocation === "EXTERNO" ? "EXTERNO" : "INTERNO";
+    this.lastLocation = location;
+    const temperature = toNumberPtBr(parts[1]);
+    const humidity = toNumberPtBr(parts[2]);
+    const pressure = toNumberPtBr(parts[3]);
+    const voc = toNumberPtBr(parts[4]);
+    const vocReal = voc;
+    const vocCorrigido = voc;
+    if ([temperature, humidity, pressure, voc].some((n) => Number.isNaN(n))) return null;
+    const isInternal = location === "INTERNO";
+    return {
+      location,
+      temperature,
+      humidity,
+      pressure,
+      voc,
+      vocReal,
+      vocCorrigido,
+      tempInterno: isInternal ? temperature : Number.NaN,
+      humInterno: isInternal ? humidity : Number.NaN,
+      pressInterno: isInternal ? pressure : Number.NaN,
+      vocInterno: isInternal ? vocCorrigido : Number.NaN,
+      vocInternoReal: isInternal ? vocReal : Number.NaN,
+      vocInternoCorrigido: isInternal ? vocCorrigido : Number.NaN,
+      tempExterno: !isInternal ? temperature : Number.NaN,
+      humExterno: !isInternal ? humidity : Number.NaN,
+      pressExterno: !isInternal ? pressure : Number.NaN,
+      vocExterno: !isInternal ? vocCorrigido : Number.NaN,
+      vocExternoReal: !isInternal ? vocReal : Number.NaN,
+      vocExternoCorrigido: !isInternal ? vocCorrigido : Number.NaN,
+      raw: rawLine
+    };
+  }
+  parseLegacyFormat(rawLine) {
     const parts = rawLine.split(",").map((s) => s.trim());
     if (parts.length < 8) return null;
     const take = parts.length >= 10 ? 10 : 8;
-    const nums = parts.slice(0, take).map((p) => Number(p));
+    const nums = parts.slice(0, take).map((p) => toNumberPtBr(p));
     if (nums.some((n) => Number.isNaN(n))) return null;
     const hasCorrectedVoc = nums.length >= 10;
+    const tempInterno = nums[0];
+    const humInterno = nums[1];
+    const pressInterno = nums[2];
     const vocInternoReal = hasCorrectedVoc ? nums[3] : nums[3];
     const vocInternoCorrigido = hasCorrectedVoc ? nums[4] : nums[3];
     const tempExterno = hasCorrectedVoc ? nums[5] : nums[4];
@@ -178,10 +311,18 @@ var SerialManager = class extends import_node_events.EventEmitter {
     const pressExterno = hasCorrectedVoc ? nums[7] : nums[6];
     const vocExternoReal = hasCorrectedVoc ? nums[8] : nums[7];
     const vocExternoCorrigido = hasCorrectedVoc ? nums[9] : nums[7];
+    const location = this.lastLocation;
     return {
-      tempInterno: nums[0],
-      humInterno: nums[1],
-      pressInterno: nums[2],
+      location,
+      temperature: location === "INTERNO" ? tempInterno : tempExterno,
+      humidity: location === "INTERNO" ? humInterno : humExterno,
+      pressure: location === "INTERNO" ? pressInterno : pressExterno,
+      voc: location === "INTERNO" ? vocInternoCorrigido : vocExternoCorrigido,
+      vocReal: location === "INTERNO" ? vocInternoReal : vocExternoReal,
+      vocCorrigido: location === "INTERNO" ? vocInternoCorrigido : vocExternoCorrigido,
+      tempInterno,
+      humInterno,
+      pressInterno,
       vocInterno: vocInternoCorrigido,
       vocInternoReal,
       vocInternoCorrigido,
@@ -206,6 +347,7 @@ var defaultNotificationSettings = {
   chatId: void 0,
   chatIds: [],
   chatIntervals: {},
+  chatBackupIntervals: {},
   heartbeatIntervalMinutes: 60,
   staleTimeoutSeconds: 60
 };
@@ -213,9 +355,10 @@ function normalizeNotificationSettings(input) {
   const phoneNumber = String(input?.phoneNumber ?? "").trim();
   const chatIdRaw = input?.chatId;
   const chatId = chatIdRaw === void 0 || chatIdRaw === null ? void 0 : String(chatIdRaw).trim() || void 0;
+  const chatIdsArr = Array.isArray(input?.chatIds) ? input.chatIds : [];
   const chatIds = Array.from(
     new Set(
-      (Array.isArray(input?.chatIds) ? input?.chatIds : []).map((value) => String(value ?? "").trim()).filter(Boolean).concat(chatId ? [chatId] : [])
+      chatIdsArr.map((value) => String(value ?? "").trim()).filter(Boolean).concat(chatId ? [chatId] : [])
     )
   );
   const rawChatIntervals = input?.chatIntervals && typeof input.chatIntervals === "object" ? input.chatIntervals : {};
@@ -225,12 +368,20 @@ function normalizeNotificationSettings(input) {
       Math.max(1, Math.min(60, Number(value) || defaultNotificationSettings.heartbeatIntervalMinutes))
     ]).filter(([chatIdKey]) => Boolean(chatIdKey))
   );
+  const rawChatBackupIntervals = input?.chatBackupIntervals && typeof input.chatBackupIntervals === "object" ? input.chatBackupIntervals : {};
+  const chatBackupIntervals = Object.fromEntries(
+    Object.entries(rawChatBackupIntervals).map(([chatIdKey, value]) => [
+      String(chatIdKey ?? "").trim(),
+      Math.max(1, Math.min(3600, Number(value) || 0))
+    ]).filter(([chatIdKey, value]) => Boolean(chatIdKey) && Number(value) > 0)
+  );
   return {
     enabled: input?.enabled === void 0 ? chatIds.length > 0 : Boolean(input.enabled),
     phoneNumber,
     chatId: chatIds[0],
     chatIds,
     chatIntervals,
+    chatBackupIntervals,
     heartbeatIntervalMinutes: Math.max(1, Number(input?.heartbeatIntervalMinutes) || defaultNotificationSettings.heartbeatIntervalMinutes),
     staleTimeoutSeconds: Math.max(5, Number(input?.staleTimeoutSeconds) || defaultNotificationSettings.staleTimeoutSeconds)
   };
@@ -333,6 +484,7 @@ var notificationSettings = normalizeNotificationSettings(readSettings().notifica
 var hasActiveCollection = false;
 var lastCollectionAt;
 var lastHeartbeatNotificationAtByChat = {};
+var lastBackupNotificationAtByChat = {};
 var lastStopNotificationFor = 0;
 var collectionFrames = [];
 var lastSensorFrame;
@@ -340,6 +492,21 @@ var autoUpdateCheckTimer;
 var notificationRuntimeState = {
   collectionState: "aguardando"
 };
+function broadcastNotificationState() {
+  publishNotificationSettings();
+  publishNotificationRuntimeState();
+}
+function saveCachedMeasurements(next) {
+  const existing = readSettings();
+  writeSettings({ ...existing, savedMeasurements: next });
+  broadcastNotificationState();
+}
+{
+  const persisted = readSettings();
+  if (persisted.lastLocation) {
+    serial.setLastLocation(persisted.lastLocation);
+  }
+}
 function formatDateTimePtBr(ts) {
   const formatted = new Date(ts).toLocaleString("pt-BR", { hour12: false });
   const [datePart, timePart] = formatted.split(", ");
@@ -425,7 +592,11 @@ function buildTelegramMenuMessage() {
     "5 min, 15 min, 30 min, 60 min.",
     "",
     "/backup",
-    "Solicita o \xFAltimo backup dispon\xEDvel da coleta.",
+    "Envia um backup atual da coleta ou agenda backups autom\xE1ticos.",
+    "Exemplos:",
+    "/backup",
+    "/backup 10 min",
+    "/backup 1 hora",
     "",
     "/print",
     "Envia uma captura da tela atual da EVA.",
@@ -446,27 +617,44 @@ function buildTelegramVocDataMessage() {
   if (!lastSensorFrame) {
     return "\u{1F4BE} Dados:\nNenhum dado de coleta foi recebido ainda.";
   }
-  const vocInterno = lastSensorFrame.vocInternoCorrigido;
-  const vocExterno = lastSensorFrame.vocExternoCorrigido;
-  const ppmInterno = vocToPPM(vocInterno);
-  const ppmExterno = vocToPPM(vocExterno);
-  const qualidadeInterna = getAirQualityLabelFromVoc(vocInterno);
-  const qualidadeExterna = getAirQualityLabelFromVoc(vocExterno);
-  return [
-    "\u{1F4BE} Dados:",
-    `Voc interno: ${formatNumberPtBr(vocInterno, 1)}`,
-    `ppm interno: ${ppmInterno}`,
-    `Temperatura interna: ${formatNumberPtBr(lastSensorFrame.tempInterno, 1)} \xB0C`,
-    `Umidade: ${formatNumberPtBr(lastSensorFrame.humInterno, 0)}`,
-    `Qualidade do ar: ${qualidadeInterna}`,
-    "",
-    "---------------",
-    `Voc externo: ${formatNumberPtBr(vocExterno, 1)}`,
-    `ppm externo: ${ppmExterno}`,
-    `Temperatura externa: ${formatNumberPtBr(lastSensorFrame.tempExterno, 1)} \xB0C`,
-    `Umidade: ${formatNumberPtBr(lastSensorFrame.humExterno, 0)}`,
-    `Qualidade do ar: ${qualidadeExterna}`
-  ].join("\n");
+  const loc = lastSensorFrame.location ?? "INTERNO";
+  const isLegacyTwoSensors = Number.isFinite(lastSensorFrame.vocInternoCorrigido) && Number.isFinite(lastSensorFrame.vocExternoCorrigido) && lastSensorFrame.vocInternoCorrigido !== lastSensorFrame.vocExternoCorrigido;
+  if (isLegacyTwoSensors) {
+    const vocInterno = lastSensorFrame.vocInternoCorrigido;
+    const vocExterno = lastSensorFrame.vocExternoCorrigido;
+    const ppmInterno = vocToPPM(vocInterno);
+    const ppmExterno = vocToPPM(vocExterno);
+    const qualidadeInterna = getAirQualityLabelFromVoc(vocInterno);
+    const qualidadeExterna = getAirQualityLabelFromVoc(vocExterno);
+    return [
+      "\u{1F4BE} Dados (dois sensores):",
+      `Voc interno: ${formatNumberPtBr(vocInterno, 1)} k\u03A9`,
+      `ppm interno: ${ppmInterno}`,
+      `Temperatura interna: ${formatNumberPtBr(lastSensorFrame.tempInterno, 1)} \xB0C`,
+      `Umidade interna: ${formatNumberPtBr(lastSensorFrame.humInterno, 0)} %`,
+      `Qualidade interna: ${qualidadeInterna}`,
+      "",
+      "---------------",
+      `Voc externo: ${formatNumberPtBr(vocExterno, 1)} k\u03A9`,
+      `ppm externo: ${ppmExterno}`,
+      `Temperatura externa: ${formatNumberPtBr(lastSensorFrame.tempExterno, 1)} \xB0C`,
+      `Umidade externa: ${formatNumberPtBr(lastSensorFrame.humExterno, 0)} %`,
+      `Qualidade externa: ${qualidadeExterna}`
+    ].join("\n");
+  }
+  const voc = Number.isFinite(lastSensorFrame.vocCorrigido) ? lastSensorFrame.vocCorrigido : lastSensorFrame.voc;
+  const ppm = vocToPPM(voc);
+  const qualidade = getAirQualityLabelFromVoc(voc);
+  const lines = [
+    `\u{1F4BE} Dados (local: ${loc}):`,
+    `VOC: ${formatNumberPtBr(voc, 1)} k\u03A9`,
+    `PPM estimado: ${ppm}`,
+    `Temperatura: ${formatNumberPtBr(lastSensorFrame.temperature ?? NaN, 1)} \xB0C`,
+    `Umidade: ${formatNumberPtBr(lastSensorFrame.humidity ?? NaN, 0)} %`,
+    `Press\xE3o: ${formatNumberPtBr(lastSensorFrame.pressure ?? NaN, 1)} hPa`,
+    `Qualidade do ar: ${qualidade}`
+  ];
+  return lines.join("\n");
 }
 function getBackupDirectory() {
   return import_node_path2.default.join(import_electron2.app.getPath("documents"), "EVA Cortex", "backups");
@@ -481,46 +669,49 @@ function buildBackupCsvText(rows) {
   const fmt1 = (n) => Number.isFinite(n) ? n.toFixed(1).replace(".", ",") : "";
   const fmt0 = (n) => Number.isFinite(n) ? Math.round(n).toString() : "";
   const header = [
-    "timestamp_iso",
-    "tempInterno_c",
-    "humInterno_pct",
-    "pressInterno_hpa",
-    "vocInternoReal_kohm",
-    "vocInterno_kohm",
-    "tempExterno_c",
-    "humExterno_pct",
-    "pressExterno_hpa",
-    "vocExternoReal_kohm",
-    "vocExterno_kohm",
-    "raw"
+    "Data/hora",
+    "Local",
+    "Temperatura",
+    "Umidade",
+    "Pressao",
+    "Voc",
+    "ppm"
   ].join(delimiter);
-  const lines = rows.map(
-    (r) => [
-      escapeCsv(new Date(r.receivedAt).toISOString()),
-      fmt1(r.tempInterno),
-      fmt0(r.humInterno),
-      fmt0(r.pressInterno),
-      fmt1(r.vocInternoReal),
-      fmt1(r.vocInterno),
-      fmt1(r.tempExterno),
-      fmt0(r.humExterno),
-      fmt0(r.pressExterno),
-      fmt1(r.vocExternoReal),
-      fmt1(r.vocExterno),
-      escapeCsv(String(r.raw ?? ""))
-    ].join(delimiter)
-  );
-  const firstRow = rows[0];
-  const lastRow = rows[rows.length - 1];
+  const buildBodyRows = (frames) => frames.map((frame) => {
+    const voc = Number.isFinite(frame.vocCorrigido) ? frame.vocCorrigido : frame.voc;
+    const ppm = Number.isFinite(voc) ? vocToPPM(voc) : Number.NaN;
+    const loc = frame.location === "EXTERNO" ? "EXTERNO" : "INTERNO";
+    return [
+      escapeCsv(new Date(frame.receivedAt).toLocaleString("pt-BR", { hour12: false })),
+      loc,
+      fmt1(frame.temperature),
+      fmt0(frame.humidity),
+      fmt1(frame.pressure),
+      fmt1(voc),
+      fmt0(ppm)
+    ].join(delimiter);
+  });
+  const ordered = rows.slice().map((r) => ({ ...r, location: r.location === "EXTERNO" ? "EXTERNO" : "INTERNO" })).sort((a, b) => a.receivedAt - b.receivedAt);
+  const internoRows = ordered.filter((r) => r.location === "INTERNO");
+  const externoRows = ordered.filter((r) => r.location === "EXTERNO");
+  const body = [];
+  if (internoRows.length > 0) body.push(...buildBodyRows(internoRows));
+  if (internoRows.length > 0 && externoRows.length > 0) {
+    body.push("");
+    body.push("");
+  }
+  if (externoRows.length > 0) body.push(...buildBodyRows(externoRows));
+  const firstRow = ordered[0];
+  const lastRow = ordered[ordered.length - 1];
   const metadata = [
     "sep=;",
     ["tipo", "backup_automatico"].join(delimiter),
     ["primeiro_dado_iso", escapeCsv(firstRow ? new Date(firstRow.receivedAt).toISOString() : "")].join(delimiter),
     ["ultimo_dado_iso", escapeCsv(lastRow ? new Date(lastRow.receivedAt).toISOString() : "")].join(delimiter),
-    ["total_registros", String(rows.length)].join(delimiter),
+    ["total_registros", String(ordered.length)].join(delimiter),
     ""
   ];
-  return [...metadata, header, ...lines].join("\r\n");
+  return [...metadata, header, ...body].join("\r\n");
 }
 function saveAutomaticBackup(rows, stoppedAt) {
   if (rows.length === 0) {
@@ -542,7 +733,18 @@ function saveRequestedBackup(rows, requestedAt) {
   const filePath = import_node_path2.default.join(backupDir, `backup_solicitado_${timestamp}.csv`);
   import_node_fs2.default.mkdirSync(backupDir, { recursive: true });
   import_node_fs2.default.writeFileSync(filePath, buildBackupCsvText(rows), "utf8");
-  return { ok: true, filePath };
+  return { ok: true, filePath, fromExistingFile: false };
+}
+function saveScheduledBackup(rows, requestedAt) {
+  if (rows.length === 0) {
+    return { ok: false, error: "Nenhum dado dispon\xEDvel para backup." };
+  }
+  const backupDir = getBackupDirectory();
+  const timestamp = new Date(requestedAt).toISOString().replace(/[:.]/g, "-");
+  const filePath = import_node_path2.default.join(backupDir, `backup_agendado_${timestamp}.csv`);
+  import_node_fs2.default.mkdirSync(backupDir, { recursive: true });
+  import_node_fs2.default.writeFileSync(filePath, buildBackupCsvText(rows), "utf8");
+  return { ok: true, filePath, fromExistingFile: false };
 }
 function findLatestBackupFile() {
   const backupDir = getBackupDirectory();
@@ -648,6 +850,26 @@ function getHeartbeatIntervalForChat(chatId, settings = notificationSettings) {
   const chatIntervals = getChatIntervalMap(settings);
   return Math.max(1, Math.min(60, Number(chatIntervals[normalizedChatId]) || Number(settings.heartbeatIntervalMinutes) || 60));
 }
+function getChatBackupIntervalMap(settings = notificationSettings) {
+  const entries = Object.entries(settings.chatBackupIntervals ?? {}).map(([chatId, minutes]) => [
+    String(chatId ?? "").trim(),
+    Math.max(1, Math.min(3600, Number(minutes) || 0))
+  ]);
+  return Object.fromEntries(entries.filter(([chatId, minutes]) => Boolean(chatId) && Number(minutes) > 0));
+}
+function getBackupIntervalForChat(chatId, settings = notificationSettings) {
+  const normalizedChatId = String(chatId ?? "").trim();
+  const chatBackupIntervals = getChatBackupIntervalMap(settings);
+  return Math.max(0, Math.min(3600, Number(chatBackupIntervals[normalizedChatId]) || 0));
+}
+function formatBackupIntervalLabel(totalMinutes) {
+  const normalized = Math.max(1, Math.round(totalMinutes));
+  if (normalized % 60 === 0) {
+    const hours = normalized / 60;
+    return `${hours} ${hours === 1 ? "hora" : "horas"}`;
+  }
+  return `${normalized} ${normalized === 1 ? "minuto" : "minutos"}`;
+}
 function syncHeartbeatRecipients(baseTs) {
   const linkedChatIds = getLinkedChatIds(notificationSettings);
   const nextMap = {};
@@ -655,6 +877,14 @@ function syncHeartbeatRecipients(baseTs) {
     nextMap[chatId] = lastHeartbeatNotificationAtByChat[chatId] ?? baseTs ?? 0;
   }
   lastHeartbeatNotificationAtByChat = nextMap;
+}
+function syncBackupRecipients(baseTs) {
+  const linkedChatIds = getLinkedChatIds(notificationSettings);
+  const nextMap = {};
+  for (const chatId of linkedChatIds) {
+    nextMap[chatId] = lastBackupNotificationAtByChat[chatId] ?? baseTs ?? 0;
+  }
+  lastBackupNotificationAtByChat = nextMap;
 }
 async function sendTelegramMessage(text, chatId) {
   const token = getTelegramBotToken();
@@ -747,23 +977,107 @@ async function handleTelegramNotifyCommand(chatId, intervalMinutes) {
   await sendTelegramMessage(`\u{1F514} Intervalo atualizado com sucesso.
 Suas notifica\xE7\xF5es peri\xF3dicas ser\xE3o enviadas a cada ${Math.round(intervalMinutes)} minutos.`, chatId);
 }
-async function handleTelegramBackupCommand(chatId) {
-  let filePath = findLatestBackupFile();
-  if (!filePath && collectionFrames.length > 0) {
-    const created = saveRequestedBackup(collectionFrames, Date.now());
-    if (created.ok) {
-      filePath = created.filePath;
-    }
+function parseTelegramBackupCommand(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) return null;
+  const match = raw.match(/^\/backup(?:@\w+)?(?:\s+(.+))?$/i);
+  if (!match) return null;
+  const argument = String(match[1] ?? "").trim();
+  if (!argument) {
+    return { mode: "send-now" };
   }
+  const normalizedArgument = argument.toLowerCase();
+  if (["off", "desligar", "desativar", "parar", "0"].includes(normalizedArgument)) {
+    return { mode: "disable-auto" };
+  }
+  const intervalMatch = normalizedArgument.match(/^(\d+)(?:\s*(min|minuto|minutos|h|hr|hora|horas))?$/i);
+  if (!intervalMatch) return null;
+  const value = Number(intervalMatch[1] ?? 0);
+  const unit = String(intervalMatch[2] ?? "min").toLowerCase();
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const isHourUnit = ["h", "hr", "hora", "horas"].includes(unit);
+  return { mode: "schedule", intervalMinutes: isHourUnit ? value * 60 : value };
+}
+function buildBackupCaption(filePath, generatedAt, originLabel) {
+  const stats = import_node_fs2.default.statSync(filePath);
+  const latestFrame = collectionFrames[collectionFrames.length - 1];
+  const latestDataText = latestFrame ? `
+Ultimo dado da coleta: ${formatDateTimeInlinePtBr(latestFrame.receivedAt)}` : "";
+  return `\u{1F4BE} Backup da coleta
+Origem: ${originLabel}
+Arquivo: ${import_node_path2.default.basename(filePath)}
+Gerado em: ${formatDateTimeInlinePtBr(generatedAt)}
+Arquivo atualizado em: ${formatDateTimeInlinePtBr(stats.mtimeMs)}${latestDataText}`;
+}
+function createCurrentBackupFile(requestedAt, mode) {
+  if (collectionFrames.length > 0) {
+    return mode === "scheduled" ? saveScheduledBackup(collectionFrames, requestedAt) : saveRequestedBackup(collectionFrames, requestedAt);
+  }
+  const filePath = findLatestBackupFile();
   if (!filePath) {
-    await sendTelegramMessage("Nenhum backup dispon\xEDvel no momento.", chatId);
+    return { ok: false, error: "Nenhum backup dispon\xEDvel no momento." };
+  }
+  return { ok: true, filePath, fromExistingFile: true };
+}
+async function handleTelegramBackupCommand(chatId, command = { mode: "send-now" }) {
+  if (command.mode === "disable-auto") {
+    const chatBackupIntervals = { ...getChatBackupIntervalMap(notificationSettings) };
+    delete chatBackupIntervals[chatId];
+    notificationSettings = normalizeNotificationSettings({
+      ...notificationSettings,
+      chatBackupIntervals,
+      enabled: getLinkedChatIds(notificationSettings).length > 0
+    });
+    delete lastBackupNotificationAtByChat[chatId];
+    writeSettings({ notifications: notificationSettings });
+    publishNotificationSettings();
+    publishNotificationRuntimeState();
+    await sendTelegramMessage("\u{1F4BE} Backup autom\xE1tico desativado para este chat.", chatId);
     return;
   }
-  const stats = import_node_fs2.default.statSync(filePath);
-  const caption = `\u{1F4BE} Backup da coleta
-Arquivo: ${import_node_path2.default.basename(filePath)}
-Data: ${formatDateTimeInlinePtBr(stats.mtimeMs)}`;
-  await sendTelegramFile("sendDocument", "document", filePath, chatId, caption);
+  if (command.mode === "schedule") {
+    if (!Number.isFinite(command.intervalMinutes) || command.intervalMinutes < 1 || command.intervalMinutes > 3600) {
+      await sendTelegramMessage(
+        "Intervalo inv\xE1lido. Use de 1 a 60 minutos, ou de 1 a 60 horas.\n\nExemplos:\n\u2022 /backup 10 min\n\u2022 /backup 1 hora\n\u2022 /backup 2 horas",
+        chatId
+      );
+      return;
+    }
+    const chatBackupIntervals = {
+      ...getChatBackupIntervalMap(notificationSettings),
+      [chatId]: Math.round(command.intervalMinutes)
+    };
+    notificationSettings = normalizeNotificationSettings({
+      ...notificationSettings,
+      chatBackupIntervals,
+      enabled: getLinkedChatIds(notificationSettings).length > 0
+    });
+    lastBackupNotificationAtByChat[chatId] = lastCollectionAt ?? Date.now();
+    writeSettings({ notifications: notificationSettings });
+    publishNotificationSettings();
+    publishNotificationRuntimeState();
+    await sendTelegramMessage(
+      `\u{1F4BE} Backup autom\xE1tico ativado com sucesso.
+Este chat receber\xE1 um CSV novo a cada ${formatBackupIntervalLabel(command.intervalMinutes)}.
+
+Para desativar, use:
+\u2022 /backup off`,
+      chatId
+    );
+    return;
+  }
+  const requestedAt = Date.now();
+  const result = createCurrentBackupFile(requestedAt, "manual");
+  if (!result.ok) {
+    await sendTelegramMessage(result.error, chatId);
+    return;
+  }
+  const caption = buildBackupCaption(
+    result.filePath,
+    requestedAt,
+    result.fromExistingFile ? "arquivo dispon\xEDvel mais recente" : "coleta atual"
+  );
+  await sendTelegramFile("sendDocument", "document", result.filePath, chatId, caption);
 }
 async function handleTelegramPrintCommand(chatId) {
   const win = getMainWindow();
@@ -890,16 +1204,20 @@ async function pollTelegramUpdates() {
       });
       continue;
     }
+    const backupCommand = parseTelegramBackupCommand(rawText);
+    if (backupCommand && chatId !== void 0 && chatId !== null) {
+      if (!linkedChatIds.includes(chatIdText)) {
+        await sendTelegramMessage("Nao vinculado. Envie /registrar EVA para conectar sua EVA ao Telegram.", chatIdText).catch(() => {
+        });
+        continue;
+      }
+      await handleTelegramBackupCommand(chatIdText, backupCommand).catch(() => {
+      });
+      continue;
+    }
     if (text.startsWith("/datavoc")) {
       if (chatId !== void 0 && chatId !== null && linkedChatIds.includes(chatIdText)) {
         await handleTelegramDatavocCommand(chatIdText).catch(() => {
-        });
-      }
-      continue;
-    }
-    if (text.startsWith("/backup")) {
-      if (chatId !== void 0 && chatId !== null && linkedChatIds.includes(chatIdText)) {
-        await handleTelegramBackupCommand(chatIdText).catch(() => {
         });
       }
       continue;
@@ -920,6 +1238,7 @@ async function pollTelegramUpdates() {
     const nextSettings = withLinkedChatId(notificationSettings, chatIdText);
     notificationSettings = nextSettings;
     lastHeartbeatNotificationAtByChat[chatIdText] = lastCollectionAt ?? Date.now();
+    lastBackupNotificationAtByChat[chatIdText] = lastCollectionAt ?? Date.now();
     writeSettings({ notifications: notificationSettings });
     publishNotificationSettings();
     publishNotificationRuntimeState();
@@ -1178,9 +1497,11 @@ function registerIpc() {
         chatId: phoneChanged ? previousSettings.chatId : normalizedNext.chatId,
         chatIds: phoneChanged ? previousSettings.chatIds : normalizedNext.chatIds,
         chatIntervals: previousSettings.chatIntervals,
+        chatBackupIntervals: previousSettings.chatBackupIntervals,
         enabled: phoneChanged ? previousSettings.enabled : normalizedNext.enabled
       });
       syncHeartbeatRecipients(lastCollectionAt ?? Date.now());
+      syncBackupRecipients(lastCollectionAt ?? Date.now());
       writeSettings({ notifications: notificationSettings });
       publishNotificationSettings();
       publishNotificationRuntimeState();
@@ -1195,7 +1516,9 @@ function registerIpc() {
         lastErrorAt: Date.now(),
         lastErrorMessage: error instanceof Error ? error.message : "Falha ao salvar configuracoes de notificacao."
       });
-      throw new Error(error instanceof Error ? error.message : "Falha ao salvar as configuracoes de notificacao.");
+      throw new Error(error instanceof Error ? error.message : "Falha ao salvar as configuracoes de notificacao.", {
+        cause: error
+      });
     }
   });
   import_electron2.ipcMain.handle("notifications:testNotification", async (_event, nextSettings) => {
@@ -1211,6 +1534,41 @@ function registerIpc() {
       return { ok: false, error: error instanceof Error ? error.message : "Falha ao enviar notificacao de teste." };
     }
   });
+  import_electron2.ipcMain.handle("measurements:get", async () => {
+    return readSettings().savedMeasurements ?? {};
+  });
+  import_electron2.ipcMain.handle("measurements:setLastLocation", async (_event, location) => {
+    const normalized = location === "EXTERNO" ? "EXTERNO" : "INTERNO";
+    const existing = readSettings();
+    writeSettings({ ...existing, lastLocation: normalized });
+    serial.setLastLocation(normalized);
+    return normalized;
+  });
+  import_electron2.ipcMain.handle("measurements:save", async (_event, payload) => {
+    const existing = readSettings();
+    const currentSaved = existing.savedMeasurements ?? {};
+    const locationRaw = payload?.location === "EXTERNO" ? "EXTERNO" : "INTERNO";
+    const loc = locationRaw === "EXTERNO" ? "externo" : "interno";
+    const nextSaved = { ...currentSaved };
+    const measurement = {
+      location: locationRaw,
+      temperature: Number(payload?.temperature) || 0,
+      humidity: Number(payload?.humidity) || 0,
+      pressure: Number(payload?.pressure) || 0,
+      voc: Number(payload?.voc) || 0,
+      vocIndex: Number(payload?.vocIndex) || 0,
+      receivedAt: Number(payload?.receivedAt) || Date.now()
+    };
+    if (loc === "interno") nextSaved.interno = measurement;
+    else nextSaved.externo = measurement;
+    saveCachedMeasurements(nextSaved);
+    return nextSaved;
+  });
+  import_electron2.ipcMain.handle("measurements:clear", async () => {
+    const existing = readSettings();
+    writeSettings({ ...existing, savedMeasurements: {} });
+    return {};
+  });
   import_electron2.ipcMain.handle("serial:connect", async (_event, portPath) => {
     writeSettings({ lastPortPath: portPath });
     await serial.connect(portPath);
@@ -1219,6 +1577,26 @@ function registerIpc() {
   import_electron2.ipcMain.handle("serial:disconnect", async () => {
     await serial.disconnect();
     return true;
+  });
+  import_electron2.ipcMain.handle("serial:sendCommand", async (_event, command) => {
+    await serial.sendCommand(String(command ?? ""));
+    return true;
+  });
+  import_electron2.ipcMain.handle("serial:requestStatus", async () => {
+    await serial.sendCommand("STATUS");
+    return true;
+  });
+  import_electron2.ipcMain.handle("serial:ping", async () => {
+    await serial.sendCommand("PING");
+    return true;
+  });
+  import_electron2.ipcMain.handle("serial:requestSetLocation", async (_event, location) => {
+    const normalized = location === "EXTERNO" ? "EXTERNO" : "INTERNO";
+    const existing = readSettings();
+    writeSettings({ ...existing, lastLocation: normalized });
+    serial.setLastLocation(normalized);
+    await serial.sendCommand(`SET_LOCAL:${normalized}`);
+    return { ok: true, location: normalized };
   });
   import_electron2.ipcMain.handle("data:exportCsv", async (_event, csvText) => {
     const { canceled, filePath } = await import_electron2.dialog.showSaveDialog({
@@ -1265,12 +1643,14 @@ serial.on("frame", (frame) => {
     collectionFrames = [frame];
     hasActiveCollection = true;
     syncHeartbeatRecipients(frame.receivedAt);
+    syncBackupRecipients(frame.receivedAt);
     lastStopNotificationFor = 0;
     publishNotificationRuntimeState({ collectionState: "coletando" });
     notifyCollectionStarted(frame.receivedAt);
   } else {
     collectionFrames.push(frame);
     syncHeartbeatRecipients(lastCollectionAt);
+    syncBackupRecipients(lastCollectionAt);
     for (const chatId of getLinkedChatIds(notificationSettings)) {
       const lastSentAt = lastHeartbeatNotificationAtByChat[chatId] ?? frame.receivedAt;
       const heartbeatIntervalMs = getHeartbeatIntervalForChat(chatId) * 60 * 1e3;
@@ -1279,12 +1659,54 @@ serial.on("frame", (frame) => {
         notifyCollectionHeartbeat(frame.receivedAt, chatId);
       }
     }
+    const dueBackupChatIds = getLinkedChatIds(notificationSettings).filter((chatId) => {
+      const backupIntervalMinutes = getBackupIntervalForChat(chatId);
+      if (!backupIntervalMinutes) return false;
+      const lastSentAt = lastBackupNotificationAtByChat[chatId] ?? frame.receivedAt;
+      return frame.receivedAt - lastSentAt >= backupIntervalMinutes * 60 * 1e3;
+    });
+    if (dueBackupChatIds.length > 0) {
+      for (const chatId of dueBackupChatIds) {
+        lastBackupNotificationAtByChat[chatId] = frame.receivedAt;
+      }
+      const requestedAt = Date.now();
+      const backupResult = createCurrentBackupFile(requestedAt, "scheduled");
+      if (backupResult.ok) {
+        const caption = buildBackupCaption(backupResult.filePath, requestedAt, "backup autom\xE1tico");
+        for (const chatId of dueBackupChatIds) {
+          sendTelegramFile("sendDocument", "document", backupResult.filePath, chatId, caption).then(() => {
+            publishNotificationRuntimeState({
+              lastSentAt: Date.now(),
+              lastSentKind: "intervalo",
+              lastErrorAt: void 0,
+              lastErrorMessage: void 0
+            });
+          }).catch((error) => {
+            publishNotificationRuntimeState({
+              lastErrorAt: Date.now(),
+              lastErrorMessage: error instanceof Error ? error.message : "Falha ao enviar backup automatico."
+            });
+          });
+        }
+      } else {
+        publishNotificationRuntimeState({
+          lastErrorAt: Date.now(),
+          lastErrorMessage: backupResult.error
+        });
+      }
+    }
     publishNotificationRuntimeState({ collectionState: "coletando" });
   }
   broadcast("serial:frame", frame);
 });
 serial.on("rawLine", (line) => {
   broadcast("serial:rawLine", line);
+});
+serial.on("control", (event) => {
+  broadcast("serial:control", event);
+});
+serial.on("txLine", (line) => {
+  broadcast("serial:txLine", line);
 });
 import_electron2.app.whenReady().then(async () => {
   ensureTelegramSecretInUserData();
@@ -1315,6 +1737,7 @@ import_electron2.app.whenReady().then(async () => {
     lastStopNotificationFor = lastCollectionAt;
     hasActiveCollection = false;
     lastHeartbeatNotificationAtByChat = {};
+    lastBackupNotificationAtByChat = {};
     publishNotificationRuntimeState({ collectionState: "parada" });
     const backupResult = (() => {
       try {
