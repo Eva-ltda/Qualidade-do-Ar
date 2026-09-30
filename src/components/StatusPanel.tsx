@@ -1,11 +1,19 @@
 import { motion } from 'framer-motion'
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { formatTime } from '../lib/format'
+
+type SerialLogLine = {
+  id: string
+  ts: number
+  text: string
+  direction?: 'tx' | 'rx'
+  kind?: SerialLineKind | 'mismatch' | 'system'
+}
 
 type Props = {
   portPath?: string
   status: ConnectionStatus
-  lines: Array<{ id: string; ts: number; text: string }>
+  lines: SerialLogLine[]
   onClear: () => void
 }
 
@@ -17,6 +25,37 @@ export function StatusPanel({ portPath, status, lines, onClear }: Props) {
     if (!container) return
     container.scrollTop = container.scrollHeight
   }, [lines])
+
+  const lineClasses = useMemo(() => {
+    return (line: SerialLogLine) => {
+      if (line.kind === 'mismatch') {
+        return 'bg-rose-500/10 text-rose-300 ring-1 ring-rose-500/30'
+      }
+      if (line.kind === 'system') {
+        return 'bg-indigo-500/10 text-indigo-300 ring-1 ring-indigo-500/30'
+      }
+      if (line.kind === 'command_error') {
+        return 'bg-rose-500/10 text-rose-300 ring-1 ring-rose-500/30'
+      }
+      if (line.direction === 'tx') {
+        return 'bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/30'
+      }
+      if (line.kind === 'control' && line.direction === 'rx') {
+        return 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30'
+      }
+      return 'bg-white/5 text-slate-200 ring-1 ring-white/5'
+    }
+  }, [])
+
+  const prefixFor = (line: SerialLogLine) => {
+    if (line.direction === 'tx') return '→'
+    if (line.direction === 'rx' && line.kind === 'control') return '←'
+    if (line.direction === 'rx' && line.kind === 'data') return '←'
+    if (line.kind === 'mismatch') return '⚠'
+    if (line.kind === 'system') return 'ℹ'
+    if (line.kind === 'command_error') return '✖'
+    return ' '
+  }
 
   return (
     <motion.aside
@@ -48,15 +87,19 @@ export function StatusPanel({ portPath, status, lines, onClear }: Props) {
 
       <div
         ref={scrollRef}
-        className="mt-4 h-[344px] overflow-y-auto rounded-xl bg-slate-950 p-3 font-mono text-xs text-emerald-300 ring-1 ring-slate-800"
+        className="mt-4 h-[344px] overflow-y-auto rounded-xl bg-slate-950 p-3 font-mono text-xs ring-1 ring-slate-800"
       >
         {lines.length === 0 ? (
           <div className="text-slate-400">Nenhuma linha recebida ainda...</div>
         ) : (
           <div className="space-y-2">
             {lines.map((line) => (
-              <div key={line.id} className="break-all rounded-lg bg-white/5 px-2 py-1.5">
+              <div
+                key={line.id}
+                className={`break-all rounded-lg px-2 py-1.5 ${lineClasses(line)}`}
+              >
                 <span className="mr-2 text-slate-400">[{formatTime(line.ts)}]</span>
+                <span className="mr-2 font-semibold">{prefixFor(line)}</span>
                 <span>{line.text}</span>
               </div>
             ))}
