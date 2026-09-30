@@ -1,13 +1,29 @@
 import { EventEmitter } from 'node:events'
 import { SerialPort } from 'serialport'
 import { ReadlineParser } from '@serialport/parser-readline'
-import type { ConnectionStatus, SensorFrame, SerialRawLine } from './types.js'
+import type {
+  ConnectionStatus,
+  MeasurementLocation,
+  SensorFrame,
+  SerialControlEvent,
+  SerialRawLine,
+} from './types.js'
 
 type SerialManagerEvents = {
   frame: (frame: SensorFrame) => void
   rawLine: (line: SerialRawLine) => void
+  control: (event: SerialControlEvent) => void
+  txLine: (line: SerialRawLine) => void
   status: (status: ConnectionStatus) => void
 }
+
+function toNumberPtBr(input: string): number {
+  const cleaned = String(input ?? '').trim().replace(',', '.')
+  if (!cleaned) return Number.NaN
+  return Number(cleaned)
+}
+
+const DEFAULT_LOCATION: MeasurementLocation = 'INTERNO'
 
 export class SerialManager extends EventEmitter {
   private port: SerialPort | undefined
@@ -16,6 +32,7 @@ export class SerialManager extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | undefined
   private staleTimer: NodeJS.Timeout | undefined
   private userInitiatedDisconnect = false
+  private lastLocation: MeasurementLocation = DEFAULT_LOCATION
 
   override on<E extends keyof SerialManagerEvents>(event: E, listener: SerialManagerEvents[E]): this {
     return super.on(event, listener)
@@ -41,6 +58,55 @@ export class SerialManager extends EventEmitter {
         productId: p.productId,
         friendlyName: (p as unknown as { friendlyName?: string }).friendlyName,
       }))
+  }
+
+  async sendCommand(command: string): Promise<void> {
+    const port = this.port
+    if (!port || !port.isOpen) {
+      const error = new Error('Porta serial não está aberta.')
+      this.emit('control', { type: 'COMMAND_ERROR', error: error.message, raw: command, receivedAt: Date.now() })
+      throw error
+    }
+
+    const trimmedCmd = String(command ?? '').trimEnd()
+    if (!trimmedCmd) {
+      const error = new Error('Comando vazio.')
+      this.emit('control', { type: 'COMMAND_ERROR', error: error.message, raw: command, receivedAt: Date.now() })
+      throw error
+    }
+
+    const payload = trimmedCmd + '\n'
+    const now = Date.now()
+    this.emit('txLine', { text: trimmedCmd, receivedAt: now, direction: 'tx', kind: 'control' })
+    this.emit('control', { type: 'TX_SENT', raw: trimmedCmd, receivedAt: now })
+
+    await new Promise<void>((resolve, reject) => {
+      port.write(payload, (err) => {
+        if (err) {
+          this.emit('control', {
+            type: 'COMMAND_ERROR',
+            error: err?.message ?? 'Erro ao escrever na serial.',
+            raw: trimmedCmd,
+            receivedAt: Date.now(),
+          })
+          reject(err)
+          return
+        }
+        port.drain((drainErr) => {
+          if (drainErr) {
+            this.emit('control', {
+              type: 'COMMAND_ERROR',
+              error: drainErr?.message ?? 'Erro ao drenar buffer serial.',
+              raw: trimmedCmd,
+              receivedAt: Date.now(),
+            })
+            reject(drainErr)
+            return
+          }
+          resolve()
+        })
+      })
+    })
   }
 
   async connect(portPath: string, baudRate = 9600) {
@@ -79,7 +145,17 @@ export class SerialManager extends EventEmitter {
       if (!trimmed) return
 
       const now = Date.now()
-      this.emit('rawLine', { text: trimmed, receivedAt: now })
+      const controlEvent = this.parseControl(trimmed, now)
+      if (controlEvent) {
+        this.emit('rawLine', { text: trimmed, receivedAt: now, direction: 'rx', kind: 'control' })
+        this.emit('control', controlEvent)
+        if (controlEvent.type === 'ACK' || controlEvent.type === 'STATUS') {
+          this.lastLocation = controlEvent.location
+        }
+        return
+      }
+
+      this.emit('rawLine', { text: trimmed, receivedAt: now, direction: 'rx', kind: 'data' })
 
       const frame = this.parseFrame(trimmed)
       if (!frame) return
@@ -101,6 +177,10 @@ export class SerialManager extends EventEmitter {
 
     this.setStatus({ state: 'connected', portPath, lastReceivedAt: this.status.lastReceivedAt })
     this.startStaleDetection()
+
+    setTimeout(() => {
+      this.sendCommand('STATUS').catch(() => {})
+    }, 250)
   }
 
   async disconnect() {
@@ -174,17 +254,99 @@ export class SerialManager extends EventEmitter {
     this.staleTimer = undefined
   }
 
+  setLastLocation(location: MeasurementLocation) {
+    this.lastLocation = location
+  }
+
+  getLastLocation(): MeasurementLocation {
+    return this.lastLocation
+  }
+
+  private parseControl(rawLine: string, receivedAt: number): SerialControlEvent | null {
+    if (!rawLine) return null
+
+    if (rawLine === 'PONG') {
+      return { type: 'PONG', raw: rawLine, receivedAt }
+    }
+
+    if (rawLine.startsWith('ACK:')) {
+      const rawLoc = rawLine.slice('ACK:'.length).trim().toUpperCase()
+      const location: MeasurementLocation = rawLoc === 'EXTERNO' ? 'EXTERNO' : 'INTERNO'
+      return { type: 'ACK', location, raw: rawLine, receivedAt }
+    }
+
+    if (rawLine.startsWith('STATUS:')) {
+      const rawLoc = rawLine.slice('STATUS:'.length).trim().toUpperCase()
+      const location: MeasurementLocation = rawLoc === 'EXTERNO' ? 'EXTERNO' : 'INTERNO'
+      return { type: 'STATUS', location, raw: rawLine, receivedAt }
+    }
+
+    return null
+  }
+
   private parseFrame(rawLine: string): Omit<SensorFrame, 'receivedAt'> | null {
     if (!rawLine) return null
 
+    const hasSemicolon = rawLine.includes(';')
+    if (hasSemicolon) return this.parseNewFormat(rawLine)
+    return this.parseLegacyFormat(rawLine)
+  }
+
+  private parseNewFormat(rawLine: string): Omit<SensorFrame, 'receivedAt'> | null {
+    const parts = rawLine.split(';').map((s) => s.trim())
+    if (parts.length < 5) return null
+
+    const rawLocation = (parts[0] ?? '').toUpperCase()
+    const location: MeasurementLocation = rawLocation === 'EXTERNO' ? 'EXTERNO' : 'INTERNO'
+    this.lastLocation = location
+
+    const temperature = toNumberPtBr(parts[1])
+    const humidity = toNumberPtBr(parts[2])
+    const pressure = toNumberPtBr(parts[3])
+    const voc = toNumberPtBr(parts[4])
+    const vocReal = voc
+    const vocCorrigido = voc
+
+    if ([temperature, humidity, pressure, voc].some((n) => Number.isNaN(n))) return null
+
+    const isInternal = location === 'INTERNO'
+
+    return {
+      location,
+      temperature,
+      humidity,
+      pressure,
+      voc,
+      vocReal,
+      vocCorrigido,
+      tempInterno: isInternal ? temperature : Number.NaN,
+      humInterno: isInternal ? humidity : Number.NaN,
+      pressInterno: isInternal ? pressure : Number.NaN,
+      vocInterno: isInternal ? vocCorrigido : Number.NaN,
+      vocInternoReal: isInternal ? vocReal : Number.NaN,
+      vocInternoCorrigido: isInternal ? vocCorrigido : Number.NaN,
+      tempExterno: !isInternal ? temperature : Number.NaN,
+      humExterno: !isInternal ? humidity : Number.NaN,
+      pressExterno: !isInternal ? pressure : Number.NaN,
+      vocExterno: !isInternal ? vocCorrigido : Number.NaN,
+      vocExternoReal: !isInternal ? vocReal : Number.NaN,
+      vocExternoCorrigido: !isInternal ? vocCorrigido : Number.NaN,
+      raw: rawLine,
+    }
+  }
+
+  private parseLegacyFormat(rawLine: string): Omit<SensorFrame, 'receivedAt'> | null {
     const parts = rawLine.split(',').map((s) => s.trim())
     if (parts.length < 8) return null
 
     const take = parts.length >= 10 ? 10 : 8
-    const nums = parts.slice(0, take).map((p) => Number(p))
+    const nums = parts.slice(0, take).map((p) => toNumberPtBr(p))
     if (nums.some((n) => Number.isNaN(n))) return null
 
     const hasCorrectedVoc = nums.length >= 10
+    const tempInterno = nums[0]
+    const humInterno = nums[1]
+    const pressInterno = nums[2]
     const vocInternoReal = hasCorrectedVoc ? nums[3] : nums[3]
     const vocInternoCorrigido = hasCorrectedVoc ? nums[4] : nums[3]
     const tempExterno = hasCorrectedVoc ? nums[5] : nums[4]
@@ -193,10 +355,19 @@ export class SerialManager extends EventEmitter {
     const vocExternoReal = hasCorrectedVoc ? nums[8] : nums[7]
     const vocExternoCorrigido = hasCorrectedVoc ? nums[9] : nums[7]
 
+    const location = this.lastLocation
+
     return {
-      tempInterno: nums[0],
-      humInterno: nums[1],
-      pressInterno: nums[2],
+      location,
+      temperature: location === 'INTERNO' ? tempInterno : tempExterno,
+      humidity: location === 'INTERNO' ? humInterno : humExterno,
+      pressure: location === 'INTERNO' ? pressInterno : pressExterno,
+      voc: location === 'INTERNO' ? vocInternoCorrigido : vocExternoCorrigido,
+      vocReal: location === 'INTERNO' ? vocInternoReal : vocExternoReal,
+      vocCorrigido: location === 'INTERNO' ? vocInternoCorrigido : vocExternoCorrigido,
+      tempInterno,
+      humInterno,
+      pressInterno,
       vocInterno: vocInternoCorrigido,
       vocInternoReal,
       vocInternoCorrigido,
@@ -210,3 +381,4 @@ export class SerialManager extends EventEmitter {
     }
   }
 }
+
