@@ -3,8 +3,14 @@ import fs from 'node:fs'
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { SerialManager } from './serial/SerialManager.js'
-import { defaultNotificationSettings, normalizeNotificationSettings, readSettings, writeSettings } from './settings.js'
-import type { ConnectionStatus, SensorFrame, SerialRawLine } from './serial/types.js'
+import {
+  defaultNotificationSettings,
+  normalizeNotificationSettings,
+  readSettings,
+  writeSettings,
+  type SavedMeasurements,
+} from './settings.js'
+import type { ConnectionStatus, MeasurementLocation, SensorFrame, SerialControlEvent, SerialRawLine } from './serial/types.js'
 
 const serial = new SerialManager()
 let notificationSettings = normalizeNotificationSettings(readSettings().notifications ?? defaultNotificationSettings)
@@ -29,6 +35,30 @@ type NotificationRuntimeState = {
 
 let notificationRuntimeState: NotificationRuntimeState = {
   collectionState: 'aguardando',
+}
+
+// NOTE: helper disponível para ajustes futuros de runtime de settings
+// function getCachedSettings() {
+//   return readSettings()
+// }
+
+function broadcastNotificationState() {
+  publishNotificationSettings()
+  publishNotificationRuntimeState()
+}
+
+function saveCachedMeasurements(next: SavedMeasurements) {
+  const existing = readSettings()
+  writeSettings({ ...existing, savedMeasurements: next })
+  broadcastNotificationState()
+}
+
+// Restore lastLocation persisted into SerialManager on startup
+{
+  const persisted = readSettings()
+  if (persisted.lastLocation) {
+    serial.setLastLocation(persisted.lastLocation)
+  }
 }
 
 function formatDateTimePtBr(ts: number) {
@@ -154,28 +184,52 @@ function buildTelegramVocDataMessage() {
     return '💾 Dados:\nNenhum dado de coleta foi recebido ainda.'
   }
 
-  const vocInterno = lastSensorFrame.vocInternoCorrigido
-  const vocExterno = lastSensorFrame.vocExternoCorrigido
-  const ppmInterno = vocToPPM(vocInterno)
-  const ppmExterno = vocToPPM(vocExterno)
-  const qualidadeInterna = getAirQualityLabelFromVoc(vocInterno)
-  const qualidadeExterna = getAirQualityLabelFromVoc(vocExterno)
+  const loc = lastSensorFrame.location ?? 'INTERNO'
+  const isLegacyTwoSensors =
+    Number.isFinite(lastSensorFrame.vocInternoCorrigido) &&
+    Number.isFinite(lastSensorFrame.vocExternoCorrigido) &&
+    lastSensorFrame.vocInternoCorrigido !== lastSensorFrame.vocExternoCorrigido
 
-  return [
-    '💾 Dados:',
-    `Voc interno: ${formatNumberPtBr(vocInterno, 1)}`,
-    `ppm interno: ${ppmInterno}`,
-    `Temperatura interna: ${formatNumberPtBr(lastSensorFrame.tempInterno, 1)} °C`,
-    `Umidade: ${formatNumberPtBr(lastSensorFrame.humInterno, 0)}`,
-    `Qualidade do ar: ${qualidadeInterna}`,
-    '',
-    '---------------',
-    `Voc externo: ${formatNumberPtBr(vocExterno, 1)}`,
-    `ppm externo: ${ppmExterno}`,
-    `Temperatura externa: ${formatNumberPtBr(lastSensorFrame.tempExterno, 1)} °C`,
-    `Umidade: ${formatNumberPtBr(lastSensorFrame.humExterno, 0)}`,
-    `Qualidade do ar: ${qualidadeExterna}`,
-  ].join('\n')
+  if (isLegacyTwoSensors) {
+    const vocInterno = lastSensorFrame.vocInternoCorrigido
+    const vocExterno = lastSensorFrame.vocExternoCorrigido
+    const ppmInterno = vocToPPM(vocInterno)
+    const ppmExterno = vocToPPM(vocExterno)
+    const qualidadeInterna = getAirQualityLabelFromVoc(vocInterno)
+    const qualidadeExterna = getAirQualityLabelFromVoc(vocExterno)
+
+    return [
+      '💾 Dados (dois sensores):',
+      `Voc interno: ${formatNumberPtBr(vocInterno, 1)} kΩ`,
+      `ppm interno: ${ppmInterno}`,
+      `Temperatura interna: ${formatNumberPtBr(lastSensorFrame.tempInterno, 1)} °C`,
+      `Umidade interna: ${formatNumberPtBr(lastSensorFrame.humInterno, 0)} %`,
+      `Qualidade interna: ${qualidadeInterna}`,
+      '',
+      '---------------',
+      `Voc externo: ${formatNumberPtBr(vocExterno, 1)} kΩ`,
+      `ppm externo: ${ppmExterno}`,
+      `Temperatura externa: ${formatNumberPtBr(lastSensorFrame.tempExterno, 1)} °C`,
+      `Umidade externa: ${formatNumberPtBr(lastSensorFrame.humExterno, 0)} %`,
+      `Qualidade externa: ${qualidadeExterna}`,
+    ].join('\n')
+  }
+
+  const voc = Number.isFinite(lastSensorFrame.vocCorrigido) ? lastSensorFrame.vocCorrigido : lastSensorFrame.voc
+  const ppm = vocToPPM(voc)
+  const qualidade = getAirQualityLabelFromVoc(voc)
+
+  const lines = [
+    `💾 Dados (local: ${loc}):`,
+    `VOC: ${formatNumberPtBr(voc, 1)} kΩ`,
+    `PPM estimado: ${ppm}`,
+    `Temperatura: ${formatNumberPtBr(lastSensorFrame.temperature ?? NaN, 1)} °C`,
+    `Umidade: ${formatNumberPtBr(lastSensorFrame.humidity ?? NaN, 0)} %`,
+    `Pressão: ${formatNumberPtBr(lastSensorFrame.pressure ?? NaN, 1)} hPa`,
+    `Qualidade do ar: ${qualidade}`,
+  ]
+
+  return lines.join('\n')
 }
 
 function getBackupDirectory() {
@@ -195,49 +249,58 @@ function buildBackupCsvText(rows: SensorFrame[]) {
   const fmt0 = (n: number) => (Number.isFinite(n) ? Math.round(n).toString() : '')
 
   const header = [
-    'timestamp_iso',
-    'tempInterno_c',
-    'humInterno_pct',
-    'pressInterno_hpa',
-    'vocInternoReal_kohm',
-    'vocInterno_kohm',
-    'tempExterno_c',
-    'humExterno_pct',
-    'pressExterno_hpa',
-    'vocExternoReal_kohm',
-    'vocExterno_kohm',
-    'raw',
+    'Data/hora',
+    'Local',
+    'Temperatura',
+    'Umidade',
+    'Pressao',
+    'Voc',
+    'ppm',
   ].join(delimiter)
 
-  const lines = rows.map((r) =>
-    [
-      escapeCsv(new Date(r.receivedAt).toISOString()),
-      fmt1(r.tempInterno),
-      fmt0(r.humInterno),
-      fmt0(r.pressInterno),
-      fmt1(r.vocInternoReal),
-      fmt1(r.vocInterno),
-      fmt1(r.tempExterno),
-      fmt0(r.humExterno),
-      fmt0(r.pressExterno),
-      fmt1(r.vocExternoReal),
-      fmt1(r.vocExterno),
-      escapeCsv(String(r.raw ?? '')),
-    ].join(delimiter),
-  )
+  const buildBodyRows = (frames: SensorFrame[]) =>
+    frames.map((frame) => {
+      const voc = Number.isFinite(frame.vocCorrigido) ? frame.vocCorrigido : frame.voc
+      const ppm = Number.isFinite(voc) ? vocToPPM(voc) : Number.NaN
+      const loc: MeasurementLocation = frame.location === 'EXTERNO' ? 'EXTERNO' : 'INTERNO'
+      return [
+        escapeCsv(new Date(frame.receivedAt).toLocaleString('pt-BR', { hour12: false })),
+        loc,
+        fmt1(frame.temperature),
+        fmt0(frame.humidity),
+        fmt1(frame.pressure),
+        fmt1(voc),
+        fmt0(ppm),
+      ].join(delimiter)
+    })
 
-  const firstRow = rows[0]
-  const lastRow = rows[rows.length - 1]
+  const ordered = rows
+    .slice()
+    .map((r) => ({ ...r, location: (r.location === 'EXTERNO' ? 'EXTERNO' : 'INTERNO') as MeasurementLocation }))
+    .sort((a, b) => a.receivedAt - b.receivedAt)
+  const internoRows = ordered.filter((r) => r.location === 'INTERNO')
+  const externoRows = ordered.filter((r) => r.location === 'EXTERNO')
+
+  const body: string[] = []
+  if (internoRows.length > 0) body.push(...buildBodyRows(internoRows))
+  if (internoRows.length > 0 && externoRows.length > 0) {
+    body.push('')
+    body.push('')
+  }
+  if (externoRows.length > 0) body.push(...buildBodyRows(externoRows))
+
+  const firstRow = ordered[0]
+  const lastRow = ordered[ordered.length - 1]
   const metadata = [
     'sep=;',
     ['tipo', 'backup_automatico'].join(delimiter),
     ['primeiro_dado_iso', escapeCsv(firstRow ? new Date(firstRow.receivedAt).toISOString() : '')].join(delimiter),
     ['ultimo_dado_iso', escapeCsv(lastRow ? new Date(lastRow.receivedAt).toISOString() : '')].join(delimiter),
-    ['total_registros', String(rows.length)].join(delimiter),
+    ['total_registros', String(ordered.length)].join(delimiter),
     '',
   ]
 
-  return [...metadata, header, ...lines].join('\r\n')
+  return [...metadata, header, ...body].join('\r\n')
 }
 
 function saveAutomaticBackup(rows: SensorFrame[], stoppedAt: number) {
@@ -267,7 +330,7 @@ function saveRequestedBackup(rows: SensorFrame[], requestedAt: number) {
   fs.mkdirSync(backupDir, { recursive: true })
   fs.writeFileSync(filePath, buildBackupCsvText(rows), 'utf8')
 
-  return { ok: true as const, filePath }
+  return { ok: true as const, filePath, fromExistingFile: false as const }
 }
 
 function saveScheduledBackup(rows: SensorFrame[], requestedAt: number) {
@@ -282,7 +345,7 @@ function saveScheduledBackup(rows: SensorFrame[], requestedAt: number) {
   fs.mkdirSync(backupDir, { recursive: true })
   fs.writeFileSync(filePath, buildBackupCsvText(rows), 'utf8')
 
-  return { ok: true as const, filePath }
+  return { ok: true as const, filePath, fromExistingFile: false as const }
 }
 
 function findLatestBackupFile() {
@@ -346,7 +409,9 @@ function ensureTelegramSecretInUserData() {
 
     fs.mkdirSync(path.dirname(userDataSecretPath), { recursive: true })
     fs.copyFileSync(resourcesSecretPath, userDataSecretPath)
-  } catch {}
+  } catch {
+    void 0 /* no-op */
+  }
 }
 
 function normalizeLinkCode(value: string) {
@@ -463,9 +528,10 @@ function syncBackupRecipients(baseTs?: number) {
   lastBackupNotificationAtByChat = nextMap
 }
 
-function canSendNotificationWithSettings(settings = notificationSettings) {
-  return settings.enabled && getLinkedChatIds(settings).length > 0 && Boolean(getTelegramBotToken())
-}
+// NOTE: helper disponível para validações futuras de permissões de envio
+// function canSendNotificationWithSettings(settings = notificationSettings) {
+//   return settings.enabled && getLinkedChatIds(settings).length > 0 && Boolean(getTelegramBotToken())
+// }
 
 async function sendTelegramMessage(text: string, chatId: string) {
   const token = getTelegramBotToken()
@@ -748,7 +814,9 @@ async function handleTelegramPrintCommand(chatId: string) {
     win.webContents.send('dashboard:finish-print')
     try {
       fs.unlinkSync(screenshotPath)
-    } catch {}
+    } catch {
+      void 0 /* no-op */
+    }
   }
 }
 
@@ -1215,7 +1283,9 @@ function registerIpc() {
         lastErrorAt: Date.now(),
         lastErrorMessage: error instanceof Error ? error.message : 'Falha ao salvar configuracoes de notificacao.',
       })
-      throw new Error(error instanceof Error ? error.message : 'Falha ao salvar as configuracoes de notificacao.')
+      throw new Error(error instanceof Error ? error.message : 'Falha ao salvar as configuracoes de notificacao.', {
+        cause: error,
+      })
     }
   })
 
@@ -1233,6 +1303,45 @@ function registerIpc() {
     }
   })
 
+  ipcMain.handle('measurements:get', async () => {
+    return readSettings().savedMeasurements ?? {}
+  })
+
+  ipcMain.handle('measurements:setLastLocation', async (_event, location) => {
+    const normalized = location === 'EXTERNO' ? 'EXTERNO' : 'INTERNO'
+    const existing = readSettings()
+    writeSettings({ ...existing, lastLocation: normalized })
+    serial.setLastLocation(normalized)
+    return normalized
+  })
+
+  ipcMain.handle('measurements:save', async (_event, payload) => {
+    const existing = readSettings()
+    const currentSaved = existing.savedMeasurements ?? {}
+    const locationRaw = payload?.location === 'EXTERNO' ? 'EXTERNO' : 'INTERNO'
+    const loc: 'interno' | 'externo' = locationRaw === 'EXTERNO' ? 'externo' : 'interno'
+    const nextSaved: SavedMeasurements = { ...currentSaved }
+    const measurement = {
+      location: locationRaw as MeasurementLocation,
+      temperature: Number(payload?.temperature) || 0,
+      humidity: Number(payload?.humidity) || 0,
+      pressure: Number(payload?.pressure) || 0,
+      voc: Number(payload?.voc) || 0,
+      vocIndex: Number(payload?.vocIndex) || 0,
+      receivedAt: Number(payload?.receivedAt) || Date.now(),
+    }
+    if (loc === 'interno') nextSaved.interno = measurement
+    else nextSaved.externo = measurement
+    saveCachedMeasurements(nextSaved)
+    return nextSaved
+  })
+
+  ipcMain.handle('measurements:clear', async () => {
+    const existing = readSettings()
+    writeSettings({ ...existing, savedMeasurements: {} })
+    return {}
+  })
+
   ipcMain.handle('serial:connect', async (_event, portPath: string) => {
     writeSettings({ lastPortPath: portPath })
     await serial.connect(portPath)
@@ -1242,6 +1351,30 @@ function registerIpc() {
   ipcMain.handle('serial:disconnect', async () => {
     await serial.disconnect()
     return true
+  })
+
+  ipcMain.handle('serial:sendCommand', async (_event, command: string) => {
+    await serial.sendCommand(String(command ?? ''))
+    return true
+  })
+
+  ipcMain.handle('serial:requestStatus', async () => {
+    await serial.sendCommand('STATUS')
+    return true
+  })
+
+  ipcMain.handle('serial:ping', async () => {
+    await serial.sendCommand('PING')
+    return true
+  })
+
+  ipcMain.handle('serial:requestSetLocation', async (_event, location: unknown) => {
+    const normalized: MeasurementLocation = location === 'EXTERNO' ? 'EXTERNO' : 'INTERNO'
+    const existing = readSettings()
+    writeSettings({ ...existing, lastLocation: normalized })
+    serial.setLastLocation(normalized)
+    await serial.sendCommand(`SET_LOCAL:${normalized}`)
+    return { ok: true as const, location: normalized }
   })
 
   ipcMain.handle('data:exportCsv', async (_event, csvText: string) => {
@@ -1365,6 +1498,14 @@ serial.on('frame', (frame: SensorFrame) => {
 
 serial.on('rawLine', (line: SerialRawLine) => {
   broadcast('serial:rawLine', line)
+})
+
+serial.on('control', (event: SerialControlEvent) => {
+  broadcast('serial:control', event)
+})
+
+serial.on('txLine', (line: SerialRawLine) => {
+  broadcast('serial:txLine', line)
 })
 
 app.whenReady().then(async () => {

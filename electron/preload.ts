@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ConnectionStatus, SensorFrame, SerialRawLine } from './serial/types.js'
-import type { NotificationSettings } from './settings.js'
+import type { ConnectionStatus, MeasurementLocation, SensorFrame, SerialControlEvent, SerialRawLine } from './serial/types.js'
+import type { NotificationSettings, SavedMeasurement, SavedMeasurements } from './settings.js'
 
 type PortInfo = {
   path: string
@@ -15,6 +15,8 @@ type ExportResult =
   | { ok: true; filePath: string }
   | { ok: false; canceled: true }
   | { ok: false; error?: string }
+
+type SetLocationResult = { ok: true; location: MeasurementLocation } | { ok: false; error?: string }
 
 type NotificationActionResult = { ok: true } | { ok: false; error?: string }
 type NotificationRuntimeState = {
@@ -50,11 +52,35 @@ const api = {
   testNotification(settings: NotificationSettings): Promise<NotificationActionResult> {
     return ipcRenderer.invoke('notifications:testNotification', settings)
   },
+  getSavedMeasurements(): Promise<SavedMeasurements> {
+    return ipcRenderer.invoke('measurements:get')
+  },
+  setLastLocation(location: MeasurementLocation): Promise<MeasurementLocation> {
+    return ipcRenderer.invoke('measurements:setLastLocation', location)
+  },
+  saveMeasurement(measurement: SavedMeasurement): Promise<SavedMeasurements> {
+    return ipcRenderer.invoke('measurements:save', measurement)
+  },
+  clearSavedMeasurements(): Promise<SavedMeasurements> {
+    return ipcRenderer.invoke('measurements:clear')
+  },
   connect(portPath: string): Promise<boolean> {
     return ipcRenderer.invoke('serial:connect', portPath)
   },
   disconnect(): Promise<boolean> {
     return ipcRenderer.invoke('serial:disconnect')
+  },
+  sendCommand(command: string): Promise<boolean> {
+    return ipcRenderer.invoke('serial:sendCommand', command)
+  },
+  requestStatus(): Promise<boolean> {
+    return ipcRenderer.invoke('serial:requestStatus')
+  },
+  ping(): Promise<boolean> {
+    return ipcRenderer.invoke('serial:ping')
+  },
+  requestSetLocation(location: MeasurementLocation): Promise<SetLocationResult> {
+    return ipcRenderer.invoke('serial:requestSetLocation', location)
   },
   exportCsv(csvText: string): Promise<ExportResult> {
     return ipcRenderer.invoke('data:exportCsv', csvText)
@@ -74,6 +100,16 @@ const api = {
     const listener = (_e: unknown, payload: SerialRawLine) => handler(payload)
     ipcRenderer.on('serial:rawLine', listener)
     return () => ipcRenderer.removeListener('serial:rawLine', listener)
+  },
+  onControl(handler: (event: SerialControlEvent) => void): Unsubscribe {
+    const listener = (_e: unknown, payload: SerialControlEvent) => handler(payload)
+    ipcRenderer.on('serial:control', listener)
+    return () => ipcRenderer.removeListener('serial:control', listener)
+  },
+  onTxLine(handler: (line: SerialRawLine) => void): Unsubscribe {
+    const listener = (_e: unknown, payload: SerialRawLine) => handler(payload)
+    ipcRenderer.on('serial:txLine', listener)
+    return () => ipcRenderer.removeListener('serial:txLine', listener)
   },
   onStatus(handler: (status: ConnectionStatus) => void): Unsubscribe {
     const listener = (_e: unknown, payload: ConnectionStatus) => handler(payload)

@@ -5,11 +5,12 @@ import { formatNumber } from '../lib/format'
 
 type Props = {
   title: string
+  subtitle?: string
   vocCalibrado: number
-  quality: { label: 'Excelente' | 'Boa' | 'Moderada' | 'Ruim' | 'Muito Ruim'; percent: number }
+  quality: { label: 'Excelente' | 'Boa' | 'Moderada' | 'Ruim' | 'Muito Ruim' | 'Aguardando'; percent: number }
 }
 
-export function VOCGauge({ title, vocCalibrado, quality }: Props) {
+export function VOCGauge({ title, subtitle, vocCalibrado, quality }: Props) {
   const size = 180
   const stroke = 14
   const r = (size - stroke) / 2
@@ -38,7 +39,7 @@ export function VOCGauge({ title, vocCalibrado, quality }: Props) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-sm font-semibold text-slate-900">{title}</div>
-          <div className="mt-1 text-xs text-slate-500">Indicador baseado em VOC calibrado</div>
+          <div className="mt-1 text-xs text-slate-500">{subtitle ?? 'Indicador baseado em VOC calibrado'}</div>
         </div>
         <div className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${tone.text} ring-slate-200 bg-slate-50`}>
           {quality.label}

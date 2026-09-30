@@ -2,6 +2,23 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 
+export type MeasurementLocation = 'INTERNO' | 'EXTERNO'
+
+export type SavedMeasurement = {
+  location: MeasurementLocation
+  temperature: number
+  humidity: number
+  pressure: number
+  voc: number
+  vocIndex: number
+  receivedAt: number
+}
+
+export type SavedMeasurements = {
+  interno?: SavedMeasurement
+  externo?: SavedMeasurement
+}
+
 export type NotificationSettings = {
   enabled: boolean
   phoneNumber: string
@@ -15,6 +32,8 @@ export type NotificationSettings = {
 
 export type Settings = {
   lastPortPath?: string
+  lastLocation?: MeasurementLocation
+  savedMeasurements?: SavedMeasurements
   notifications?: NotificationSettings
 }
 
@@ -33,9 +52,10 @@ export function normalizeNotificationSettings(input?: Partial<NotificationSettin
   const phoneNumber = String(input?.phoneNumber ?? '').trim()
   const chatIdRaw = input?.chatId
   const chatId = chatIdRaw === undefined || chatIdRaw === null ? undefined : String(chatIdRaw).trim() || undefined
+  const chatIdsArr = Array.isArray(input?.chatIds) ? (input!.chatIds as unknown[]) : []
   const chatIds = Array.from(
     new Set(
-      (Array.isArray(input?.chatIds) ? input?.chatIds : [])
+      chatIdsArr
         .map((value) => String(value ?? '').trim())
         .filter(Boolean)
         .concat(chatId ? [chatId] : []),
@@ -91,11 +111,15 @@ function pickReadableSettingsPath() {
 
   try {
     if (fs.existsSync(primary)) return primary
-  } catch {}
+  } catch {
+    void 0 /* no-op */
+  }
 
   try {
     if (fs.existsSync(fallback)) return fallback
-  } catch {}
+  } catch {
+    void 0 /* no-op */
+  }
 
   return primary
 }
@@ -153,9 +177,13 @@ export function writeSettings(next: Settings) {
       if (fs.existsSync(filePath)) {
         try {
           fs.chmodSync(filePath, 0o666)
-        } catch {}
+        } catch {
+          void 0 /* no-op */
+        }
       }
-    } catch {}
+    } catch {
+      void 0 /* no-op */
+    }
 
     fs.writeFileSync(filePath, text, 'utf8')
   }
@@ -168,7 +196,9 @@ export function writeSettings(next: Settings) {
     writeToPath(preferred)
     preferredSettingsPath = preferred
     return
-  } catch {}
+  } catch {
+    void 0 /* no-op */
+  }
 
   const alt = preferred === primary ? fallback : primary
   try {
